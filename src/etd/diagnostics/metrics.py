@@ -21,6 +21,12 @@ def _pairwise_distances(
     Uses ||x - y||^2 = ||x||^2 + ||y||^2 - 2 x . y, then sqrt.
     Floors at zero before sqrt to avoid NaN from float cancellation.
 
+    .. warning::
+        Materializes the full ``(N, M)`` matrix.  For large point sets
+        (e.g. reference-vs-reference with M > 5000), prefer
+        :func:`_mean_pairwise_distance` which computes the mean without
+        allocating the full matrix.
+
     Args:
         X: First point set, shape ``(N, d)``.
         Y: Second point set, shape ``(M, d)``.
@@ -33,6 +39,37 @@ def _pairwise_distances(
     xy = X @ Y.T                   # (N, M)
     sq_dists = xx[:, None] + yy[None, :] - 2.0 * xy
     return jnp.sqrt(jnp.maximum(sq_dists, 0.0))
+
+
+def _mean_pairwise_distance(
+    X: jnp.ndarray,  # (N, d)
+    Y: jnp.ndarray,  # (M, d)
+) -> jnp.ndarray:     # scalar
+    """Mean Euclidean distance between two point sets, O(M) memory.
+
+    Computes ``mean(||x_i - y_j||)`` over all (i, j) pairs by vmapping
+    over rows of X, computing one (M,) distance vector at a time and
+    immediately reducing to a scalar.  Peak memory is O(max(N, M) · d)
+    instead of O(N · M).
+
+    Args:
+        X: First point set, shape ``(N, d)``.
+        Y: Second point set, shape ``(M, d)``.
+
+    Returns:
+        Mean pairwise Euclidean distance (scalar).
+    """
+    yy = jnp.sum(Y ** 2, axis=1)  # (M,) — precompute once
+
+    def _row_mean(x_i):
+        """Mean distance from a single point x_i to all of Y."""
+        # ||x_i - y_j||^2 = ||x_i||^2 + ||y_j||^2 - 2 x_i · y_j
+        sq = jnp.sum(x_i ** 2) + yy - 2.0 * (Y @ x_i)  # (M,)
+        return jnp.mean(jnp.sqrt(jnp.maximum(sq, 0.0)))
+
+    # vmap over rows of X, then average the per-row means
+    row_means = jax.vmap(_row_mean)(X)  # (N,)
+    return jnp.mean(row_means)
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +96,11 @@ def energy_distance(
     Returns:
         Energy distance (non-negative scalar).
     """
-    cross = _pairwise_distances(particles, reference)
-    self_p = _pairwise_distances(particles, particles)
-    self_r = _pairwise_distances(reference, reference)
+    cross = _mean_pairwise_distance(particles, reference)
+    self_p = _mean_pairwise_distance(particles, particles)
+    self_r = _mean_pairwise_distance(reference, reference)
 
-    return 2.0 * jnp.mean(cross) - jnp.mean(self_p) - jnp.mean(self_r)
+    return 2.0 * cross - self_p - self_r
 
 
 def sliced_wasserstein(
