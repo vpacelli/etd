@@ -18,9 +18,29 @@ from jax.scipy.special import logsumexp
 from etd.costs import build_cost_fn, median_normalize
 from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalanced
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
+from etd.schedule import resolve_param
 from etd.types import ETDConfig, ETDState, Target
 from etd.update import systematic_resample
 from etd.weights import importance_weights
+
+
+def _resolve_sigma(config: ETDConfig, step: int):
+    """Resolve sigma, respecting FDR coupling with alpha.
+
+    When ``fdr=True``, σ = √(2α) — if α is scheduled, σ tracks it.
+    When ``fdr=False``, σ is resolved independently (may be scheduled).
+
+    Args:
+        config: ETD configuration (static for JIT).
+        step: Current iteration (may be traced).
+
+    Returns:
+        Scalar sigma value.
+    """
+    if config.fdr:
+        alpha = resolve_param(config, "alpha", step)
+        return jnp.sqrt(2.0 * alpha)
+    return resolve_param(config, "sigma", step)
 
 
 def init(
@@ -93,13 +113,19 @@ def step(
         P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)
         preconditioner = P
 
+    # --- Resolve scheduled parameters ---
+    alpha = resolve_param(config, "alpha", state.step)
+    sigma = _resolve_sigma(config, state.step)
+    eps = resolve_param(config, "epsilon", state.step)
+    step_size = resolve_param(config, "step_size", state.step)
+
     # --- 1. Propose ---
     proposals, means, scores = langevin_proposals(
         key_propose,
         state.positions,
         target,
-        alpha=config.alpha,
-        sigma=config.resolved_sigma,
+        alpha=alpha,
+        sigma=sigma,
         n_proposals=config.n_proposals,
         use_score=config.use_score,
         score_clip_val=config.score_clip,
@@ -111,14 +137,15 @@ def step(
     # --- 2. IS-corrected target weights ---
     log_b = importance_weights(
         proposals, means, target,
-        sigma=config.resolved_sigma,
+        sigma=sigma,
         preconditioner=preconditioner,
     )
 
     # --- 2b. DV feedback: augment target weights with dual potential ---
     # Uses g from *previous* iteration; on first step dual_g = zeros → no effect.
     if config.dv_feedback:
-        log_b = log_b - config.dv_weight * state.dual_g
+        dv_weight = resolve_param(config, "dv_weight", state.step)
+        log_b = log_b - dv_weight * state.dual_g
         log_b = log_b - logsumexp(log_b)
 
     # --- 3. Cost matrix ---
@@ -136,7 +163,7 @@ def step(
     if config.coupling == "balanced":
         log_gamma, dual_f, dual_g, sinkhorn_iters = sinkhorn_log_domain(
             C, log_a, log_b,
-            eps=config.epsilon,
+            eps=eps,
             max_iter=config.sinkhorn_max_iter,
             tol=config.sinkhorn_tol,
             dual_f_init=state.dual_f,
@@ -145,7 +172,7 @@ def step(
     elif config.coupling == "unbalanced":
         log_gamma, dual_f, dual_g, sinkhorn_iters = sinkhorn_unbalanced(
             C, log_a, log_b,
-            eps=config.epsilon,
+            eps=eps,
             rho=config.rho,
             max_iter=config.sinkhorn_max_iter,
             tol=config.sinkhorn_tol,
@@ -155,7 +182,7 @@ def step(
     elif config.coupling == "gibbs":
         log_gamma, dual_f, dual_g = gibbs_coupling(
             C, log_a, log_b,
-            eps=config.epsilon,
+            eps=eps,
         )
         sinkhorn_iters = jnp.int32(0)
     else:
@@ -166,7 +193,7 @@ def step(
         key_update,
         log_gamma,
         proposals,
-        step_size=config.step_size,
+        step_size=step_size,
         positions=state.positions if config.step_size < 1.0 else None,
     )
 

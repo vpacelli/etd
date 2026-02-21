@@ -31,16 +31,38 @@ experiment:
       coupling: "balanced"
       update: "categorical"
       use_score: true
+      n_proposals: 25
+      sinkhorn_tol: 1e-3
       epsilon: 0.1
       alpha: 0.05
 
-    - label: "ETD-B-Linf"                                                                                                                                                                 
+    - label: "ETD-B-Linf"
       cost: "linf"
       coupling: "balanced"
       update: "categorical"
-      use_score: true
+      n_proposals: 25
+      sinkhorn_tol: 1e-3
       epsilon: 0.1
       alpha: 0.05
+
+    - label: "ETD-B-DV"
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      dv_feedback: true
+      dv_weight: {schedule: linear_warmup, value: 1.0, warmup: 200}
+      n_proposals: 25
+      sinkhorn_tol: 1e-3
+      epsilon: 0.1
+      alpha: 0.05
+
+    # - label: "ETD-B-Maha"
+    #   cost: "mahalanobis"
+    #   coupling: "balanced"
+    #   precondition: true
+    #   n_proposals: 50
+    #   epsilon: 0.1
+    #   alpha: 0.05
 
     # - label: "ETD-SR"
     #   cost: "euclidean"

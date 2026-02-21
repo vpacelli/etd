@@ -129,6 +129,9 @@ class ETDConfig:
     # --- SDD ---
     sdd: bool = False
 
+    # --- Schedules ---
+    schedules: tuple = ()  # (("dv_weight", Schedule(...)), ("epsilon", Schedule(...)), ...)
+
     @property
     def resolved_sigma(self) -> float:
         """Return the proposal noise scale.

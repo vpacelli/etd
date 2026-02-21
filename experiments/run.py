@@ -39,6 +39,7 @@ from rich.table import Table
 
 from etd.baselines import BASELINES, get_baseline
 from etd.diagnostics.metrics import energy_distance, mean_error, mode_coverage
+from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
 from etd.targets import get_target
 from etd.types import ETDConfig
@@ -196,6 +197,27 @@ def build_algo_config(
             raw_cost = dict(raw_cost)  # copy to avoid mutating YAML entry
             kwargs["cost"] = raw_cost.pop("type")
             kwargs["cost_params"] = tuple(sorted(raw_cost.items()))
+
+        # Extract schedule dicts: {schedule: "linear_warmup", value: 1.0, warmup: 200}
+        schedules = []
+        for k in list(kwargs):
+            v = kwargs[k]
+            if isinstance(v, dict) and "schedule" in v:
+                v = dict(v)  # copy to avoid mutating YAML entry
+                kind = v.pop("schedule")
+                value = float(v.pop("value"))
+                # Coerce remaining kwargs to appropriate types
+                sched_kw = {}
+                for sk, sv in v.items():
+                    if sk == "warmup":
+                        sched_kw[sk] = int(sv)
+                    else:
+                        sched_kw[sk] = float(sv)
+                sched = Schedule(kind=kind, value=value, **sched_kw)
+                kwargs[k] = value  # base field gets target/start value
+                schedules.append((k, sched))
+        if schedules:
+            kwargs["schedules"] = tuple(schedules)
 
         # Coerce YAML values to match ETDConfig field types.
         # YAML parses '1e-3' as a string; this casts it to float.
