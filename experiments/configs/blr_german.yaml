@@ -54,6 +54,15 @@ experiment:
       epsilon: 0.1
       alpha: 0.01
 
+    - label: "ETD-B-IMQ"
+      cost:
+        type: "imq"
+        c: 0.5
+      coupling: "balanced"
+      epsilon: 0.1
+      alpha: 0.5
+      n_proposals: 25
+
     - label: "SVGD"
       type: "baseline"
       method: "svgd"
