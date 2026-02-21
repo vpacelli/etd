@@ -34,10 +34,18 @@ CRIMSON_SEQ = [
 ]
 
 ALGO_COLORS = {
+    # ETD variants (crimson family)
     "ETD": CRIMSON,
+    "ETD-B": CRIMSON,
+    "ETD-UB": "#A10E2B",
+    "ETD-B-Maha": "#E89DA3",
+    "ETD-SR": "#E89DA3",
+    "ETD-B-SF": "#B22222",
+    # Other algorithms
     "SDD": STEEL_BLUE,
     "SVGD": TEAL,
-    "MPPI": SLATE_GRAY,
+    "ULA": SLATE_GRAY,
+    "MPPI": "#6A5ACD",      # Slate blue — distinct from ULA's gray
     "EKS": DARK_CRIMSON,
 }
 
