@@ -4,12 +4,14 @@ from etd.targets.banana import BananaTarget
 from etd.targets.funnel import FunnelTarget
 from etd.targets.gaussian import GaussianTarget
 from etd.targets.gmm import GMMTarget
+from etd.targets.logistic import LogisticRegressionTarget
 
 TARGETS = {
     "gaussian": GaussianTarget,
     "gmm": GMMTarget,
     "banana": BananaTarget,
     "funnel": FunnelTarget,
+    "logistic": LogisticRegressionTarget,
 }
 
 
@@ -38,4 +40,5 @@ __all__ = [
     "FunnelTarget",
     "GaussianTarget",
     "GMMTarget",
+    "LogisticRegressionTarget",
 ]
