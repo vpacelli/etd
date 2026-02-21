@@ -8,12 +8,16 @@ Covers:
   - Integration: validation, smoke tests for each variant
 """
 
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from etd.costs import COSTS, build_cost_fn
 from etd.costs.euclidean import squared_euclidean_cost
+from etd.costs.imq import imq_cost
 from etd.costs.linf import linf_cost
 from etd.costs.mahalanobis import mahalanobis_cost
 from etd.coupling.gibbs import gibbs_coupling
@@ -453,11 +457,12 @@ class TestIntegration:
         assert np.isfinite(ess), f"Coupling ESS should be finite, got {ess}"
 
     def test_cost_registry_has_new_entries(self):
-        """Registry should include mahalanobis and linf."""
+        """Registry should include mahalanobis, linf, and imq."""
         from etd.costs import COSTS
         assert "mahalanobis" in COSTS
         assert "linf" in COSTS
         assert "euclidean" in COSTS
+        assert "imq" in COSTS
 
     def test_coupling_registry_has_unbalanced(self):
         """Registry should include unbalanced."""
@@ -465,3 +470,130 @@ class TestIntegration:
         assert "unbalanced" in COUPLINGS
         assert "balanced" in COUPLINGS
         assert "gibbs" in COUPLINGS
+
+    def test_step_with_imq(self, rng):
+        """Smoke test: one ETD step with IMQ cost."""
+        target = SimpleGaussian(dim=4)
+        config = ETDConfig(
+            n_particles=15, n_proposals=10, n_iterations=1,
+            cost="imq", cost_params=(("c", 1.0),),
+            coupling="balanced", epsilon=0.5, alpha=0.05,
+        )
+
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, info = etd_step(k2, state, target, config)
+
+        assert new_state.positions.shape == (15, 4)
+        assert jnp.all(jnp.isfinite(new_state.positions))
+        assert jnp.isfinite(info["coupling_ess"])
+
+
+# ===========================================================================
+# IMQ (Positive Multiquadric) Cost
+# ===========================================================================
+
+class TestIMQCost:
+    def test_known_value(self):
+        """C(0, [3,4]) with c=1 → sqrt(1 + 25) - 1 = sqrt(26) - 1."""
+        x = jnp.array([[0.0, 0.0]])   # (1, 2)
+        y = jnp.array([[3.0, 4.0]])    # (1, 2)
+
+        C = imq_cost(x, y, c=1.0)
+        expected = jnp.sqrt(26.0) - 1.0
+        np.testing.assert_allclose(float(C[0, 0]), float(expected), atol=1e-5)
+
+    def test_self_diagonal_zero(self, rng):
+        """C(X, X) diagonal should be zero for any c."""
+        X = jax.random.normal(rng, (15, 4))
+        C = imq_cost(X, X, c=2.0)
+        np.testing.assert_allclose(np.array(jnp.diag(C)), 0.0, atol=1e-5)
+
+    def test_nonnegative(self, positions_proposals):
+        """All entries should be non-negative."""
+        positions, proposals = positions_proposals
+        C = imq_cost(positions, proposals, c=1.0)
+        assert jnp.all(C >= -1e-7)
+
+    def test_sublinear(self, positions_proposals):
+        """For large distances, IMQ < squared Euclidean.
+
+        sqrt(c² + r²) - c < r²/2 for large r, since IMQ is O(r) while
+        squared Euclidean is O(r²).
+        """
+        positions, proposals = positions_proposals
+        C_imq = imq_cost(positions, proposals, c=1.0)
+        C_euc = squared_euclidean_cost(positions, proposals)
+
+        # IMQ grows as ~r (sub-linear) vs r²/2 → strictly less for all r > 0
+        # (actually sqrt(c² + r²) - c ≤ r for all r ≥ 0, and r < r²/2 for r > 2)
+        # Filter to entries where squared distance > 4 (i.e., r > 2)
+        large_mask = C_euc > 2.0  # r² > 4 → r > 2
+        if jnp.any(large_mask):
+            assert jnp.all(C_imq[large_mask] < C_euc[large_mask])
+
+    def test_reduces_to_l2_norm_as_c_to_zero(self, positions_proposals):
+        """As c → 0, IMQ → ||x - y||₂ = sqrt(2 * C_euc)."""
+        positions, proposals = positions_proposals
+        C_imq = imq_cost(positions, proposals, c=1e-8)
+        C_euc = squared_euclidean_cost(positions, proposals)
+        l2_norm = jnp.sqrt(2.0 * C_euc)
+
+        np.testing.assert_allclose(
+            np.array(C_imq), np.array(l2_norm), rtol=1e-3,
+        )
+
+    def test_shape(self, positions_proposals):
+        """Output shape should be (N, P)."""
+        positions, proposals = positions_proposals
+        C = imq_cost(positions, proposals, c=1.0)
+        assert C.shape == (20, 30)
+
+
+# ===========================================================================
+# Parameterized Cost Wiring (build_cost_fn)
+# ===========================================================================
+
+class TestBuildCostFn:
+    def test_no_params_returns_base_fn(self):
+        """build_cost_fn without params returns the base function."""
+        fn = build_cost_fn("euclidean")
+        assert fn is squared_euclidean_cost
+
+    def test_with_params_returns_partial(self):
+        """build_cost_fn with params returns a functools.partial."""
+        fn = build_cost_fn("imq", (("c", 2.0),))
+        assert isinstance(fn, functools.partial)
+        assert fn.keywords == {"c": 2.0}
+
+    def test_partial_produces_correct_result(self):
+        """Partial with c=2 gives correct IMQ cost."""
+        fn = build_cost_fn("imq", (("c", 2.0),))
+        x = jnp.array([[0.0, 0.0]])
+        y = jnp.array([[3.0, 4.0]])
+        C = fn(x, y)
+        expected = jnp.sqrt(4.0 + 25.0) - 2.0  # sqrt(29) - 2
+        np.testing.assert_allclose(float(C[0, 0]), float(expected), atol=1e-5)
+
+    def test_unknown_cost_raises(self):
+        """build_cost_fn with unknown name raises KeyError."""
+        with pytest.raises(KeyError, match="Unknown cost"):
+            build_cost_fn("nonexistent")
+
+    def test_yaml_string_cost(self):
+        """String-form cost in ETDConfig works (backward compat)."""
+        config = ETDConfig(cost="euclidean")
+        assert config.cost == "euclidean"
+        assert config.cost_params == ()
+
+    def test_yaml_mapping_cost(self):
+        """Dict-style cost parses to cost + cost_params correctly."""
+        # Simulate what run.py does when it sees cost: {type: imq, c: 1.0}
+        raw_cost = {"type": "imq", "c": 1.0}
+        raw_cost_copy = dict(raw_cost)
+        cost_name = raw_cost_copy.pop("type")
+        cost_params = tuple(sorted(raw_cost_copy.items()))
+
+        config = ETDConfig(cost=cost_name, cost_params=cost_params)
+        assert config.cost == "imq"
+        assert config.cost_params == (("c", 1.0),)

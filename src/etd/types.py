@@ -97,6 +97,7 @@ class ETDConfig:
 
     # --- Composable axes (string names → resolved to functions at build) ---
     cost: str = "euclidean"
+    cost_params: tuple = ()   # sorted (key, value) pairs, e.g. (("c", 1.0),)
     coupling: str = "balanced"
     update: str = "categorical"
 

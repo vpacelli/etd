@@ -189,6 +189,13 @@ def build_algo_config(
         kwargs["n_particles"] = shared.get("n_particles", 100)
         kwargs["n_iterations"] = shared.get("n_iterations", 500)
 
+        # Normalize dict-style cost: {type: imq, c: 1.0} → cost="imq", cost_params=(("c",1.0),)
+        raw_cost = kwargs.get("cost", "euclidean")
+        if isinstance(raw_cost, dict):
+            raw_cost = dict(raw_cost)  # copy to avoid mutating YAML entry
+            kwargs["cost"] = raw_cost.pop("type")
+            kwargs["cost_params"] = tuple(sorted(raw_cost.items()))
+
         config = ETDConfig(**kwargs)
         return config, etd_init, etd_step, False
 

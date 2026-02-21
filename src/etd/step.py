@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 
-from etd.costs import get_cost_fn, median_normalize
+from etd.costs import build_cost_fn, median_normalize
 from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalanced
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.types import ETDConfig, ETDState, Target
@@ -122,7 +122,7 @@ def step(
         log_b = log_b - logsumexp(log_b)
 
     # --- 3. Cost matrix ---
-    cost_fn = get_cost_fn(config.cost)
+    cost_fn = build_cost_fn(config.cost, config.cost_params)
     C = cost_fn(state.positions, proposals, preconditioner=preconditioner)  # (N, N*M)
 
     # --- 4. Median normalize ---
