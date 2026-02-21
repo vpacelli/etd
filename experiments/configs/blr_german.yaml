@@ -23,6 +23,7 @@ experiment:
     - "variance_ratio_ref"
     - "mean_error"
     - "energy_distance"
+    - "sinkhorn_iters"
 
   algorithms:
     - label: "ETD-B"
