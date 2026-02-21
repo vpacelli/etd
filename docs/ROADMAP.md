@@ -19,6 +19,7 @@ test/experiment gate. Do not proceed to the next phase until the gate passes.
 - [ ] `proposals/langevin.py`: Score-guided + score-free proposals, score clipping
 - [ ] `update/categorical.py`: Systematic resampling from log-coupling
 - [ ] `weights.py`: IS-corrected target weights (always on)
+- [ ] `weights.py`: IS-corrected target weights with proposal density evaluation and floor
 
 ### Gate
 
@@ -83,6 +84,10 @@ so we can produce reproducible multi-algorithm benchmarks.
 - [ ] `experiments/run.py`: YAML → config → run → save metrics + particles
 - [ ] Sweep expansion (list params → Cartesian product)
 - [ ] Rich terminal output (progress bars, summary tables)
+- [ ] `experiments/run.py`: main runner with sweep expansion, Rich output, `run_single()` factored out
+- [ ] `experiments/tune.py`: grid-search tuner reusing `run_single()`
+- [ ] `experiments/datasets.py`: DuckDB pipeline for UCI datasets (German Credit, Australian)
+- [ ] `data/etd.duckdb` created and populated.
 
 ### Gate
 
@@ -138,6 +143,9 @@ paper. Implement SDD for comparison.
 - [ ] `update/barycentric.py`: Barycentric projection with step size
 - [ ] `extensions/sdd.py`: SDD-RB (self-coupling subtraction)
 - [ ] NUTS reference sampler integration (numpyro)
+- [ ] `experiments/nuts.py`: NUTS reference sampler with convergence gate (R-hat, ESS, divergences)
+[ ] `experiments/datasets.py`: Statcast pipeline (if pitching target is in scope)
+[ ] `results/reference/{target}.npz` cached for all paper targets
 
 ### Gate
 
