@@ -13,10 +13,12 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import functools
 import itertools
 import json
 import os
 import time
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -38,7 +40,9 @@ from rich.progress import (
 from rich.table import Table
 
 from etd.baselines import BASELINES, get_baseline
-from etd.diagnostics.metrics import energy_distance, mean_error, mode_coverage
+from etd.diagnostics.metrics import (
+    energy_distance, mean_error, mode_coverage, sliced_wasserstein,
+)
 from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
 from etd.targets import get_target
@@ -56,6 +60,92 @@ DEBUG = os.environ.get("ETD_DEBUG", "0") == "1"
 def maybe_jit(fn, **kwargs):
     """Wrap ``fn`` with ``jax.jit`` unless debug mode is active."""
     return fn if DEBUG else jax.jit(fn, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Scan runner infrastructure
+# ---------------------------------------------------------------------------
+
+def _compute_segments(
+    checkpoints: List[int],
+    n_iterations: int,
+) -> List[Tuple[int, int, int]]:
+    """Convert checkpoint list to contiguous scan segments.
+
+    Each segment is ``(start, n_steps, checkpoint)`` where
+    ``start`` is the 1-based iteration index of the first step,
+    ``n_steps`` is how many steps to run, and ``checkpoint`` is
+    the iteration at which to record metrics (end of segment).
+
+    Args:
+        checkpoints: Sorted iteration numbers at which to record.
+        n_iterations: Total iterations.
+
+    Returns:
+        List of ``(start, n_steps, checkpoint)`` tuples.
+    """
+    # Filter out 0 (handled separately) and anything beyond n_iterations
+    ckpts = sorted(c for c in checkpoints if 0 < c <= n_iterations)
+    if not ckpts:
+        return []
+
+    segments = []
+    prev = 0
+    for c in ckpts:
+        n_steps = c - prev
+        if n_steps > 0:
+            segments.append((prev + 1, n_steps, c))
+        prev = c
+    return segments
+
+
+def _make_jit_scan(
+    step_fn: Callable,
+    target: object,
+    config: Any,
+) -> Callable:
+    """Build a JIT-compiled scan runner for a given step_fn/target/config.
+
+    The returned function runs ``n_steps`` iterations of ``step_fn`` fused
+    into a single ``jax.lax.scan``, with buffer donation for in-place state
+    reuse and ``fold_in`` keying for deterministic PRNG.
+
+    Args:
+        step_fn: Algorithm step function ``(key, state, target, config) → (state, info)``.
+        target: Target distribution (captured by closure, static for JIT).
+        config: Algorithm config (captured by closure, static for JIT).
+
+    Returns:
+        ``run_segment(state, key_base, start_iter, n_steps) → final_state``
+    """
+    # Suppress JAX warning about donating int32 fields (e.g. state.step)
+    warnings.filterwarnings(
+        "ignore", message=".*Some donated buffers were not usable.*"
+    )
+
+    @functools.partial(jax.jit, static_argnums=(2, 3), donate_argnums=(0,))
+    def run_segment(state, key_base, start_iter, n_steps):
+        """Run n_steps of step_fn as a fused scan.
+
+        Args:
+            state: Algorithm state (donated — buffer reused in-place).
+            key_base: Base PRNG key; per-step keys derived via fold_in.
+            start_iter: 1-based iteration index of the first step.
+            n_steps: Number of steps to run (static).
+
+        Returns:
+            Final state after n_steps.
+        """
+        def scan_body(carry, t_offset):
+            t = start_iter + t_offset
+            key_step = jax.random.fold_in(key_base, t)
+            new_state, _info = step_fn(key_step, carry, target, config)
+            return new_state, None
+
+        final_state, _ = jax.lax.scan(scan_body, state, jnp.arange(n_steps))
+        return final_state
+
+    return run_segment
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +271,9 @@ def build_algo_config(
         return config, bl["init"], bl["step"], True
 
     else:
-        # ETD
+        # ETD or SDD
+        is_sdd = entry.get("method") == "sdd"
+
         kwargs = {}
         for k, v in entry.items():
             if k in _ETD_META_KEYS:
@@ -218,6 +310,25 @@ def build_algo_config(
                 schedules.append((k, sched))
         if schedules:
             kwargs["schedules"] = tuple(schedules)
+
+        if is_sdd:
+            from etd.extensions.sdd import SDDConfig
+            from etd.extensions.sdd import init as sdd_init
+            from etd.extensions.sdd import step as sdd_step
+
+            _COERCE = {"float": float, "int": int, "bool": bool}
+            field_types = {f.name: f.type for f in dataclasses.fields(SDDConfig)}
+            for k, v in list(kwargs.items()):
+                coerce_fn = _COERCE.get(field_types.get(k, ""))
+                if coerce_fn is not None and not isinstance(v, coerce_fn):
+                    kwargs[k] = coerce_fn(v)
+
+            # Remove keys not in SDDConfig
+            valid_fields = {f.name for f in dataclasses.fields(SDDConfig)}
+            kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+
+            config = SDDConfig(**kwargs)
+            return config, sdd_init, sdd_step, False
 
         # Coerce YAML values to match ETDConfig field types.
         # YAML parses '1e-3' as a string; this casts it to float.
@@ -300,6 +411,9 @@ def get_reference_data(
 METRIC_DISPATCH = {
     "energy_distance": lambda p, t, ref: float(energy_distance(p, ref))
         if ref is not None else float("nan"),
+    "sliced_wasserstein": lambda p, t, ref: float(
+        sliced_wasserstein(p, ref, jax.random.key(0))
+    ) if ref is not None else float("nan"),
     "mode_coverage": lambda p, t, ref: float(
         mode_coverage(p, t.means, tolerance=2.0)
     ) if hasattr(t, "means") else float("nan"),
@@ -352,8 +466,12 @@ def run_single(
     metrics_list: List[str],
     ref_data: Optional[jnp.ndarray],
     step_jit: Optional[Callable] = None,
+    debug: bool = False,
 ) -> Tuple[Dict[int, Dict[str, float]], Dict[int, np.ndarray], float]:
     """Run a single algorithm to completion.
+
+    Uses ``jax.lax.scan`` with buffer donation for fused execution unless
+    ``debug=True``, in which case falls back to a Python loop (no JIT).
 
     Args:
         key: JAX PRNG key.
@@ -368,6 +486,7 @@ def run_single(
         metrics_list: Which metrics to compute.
         ref_data: Reference samples for metrics (or None).
         step_jit: Pre-compiled step function (if None, uses step_fn directly).
+        debug: If True, use Python loop instead of lax.scan.
 
     Returns:
         Tuple ``(metrics_dict, particles_dict, wall_clock)`` where:
@@ -377,45 +496,84 @@ def run_single(
     """
     k_init, k_run = jax.random.split(key)
 
-    state = init_fn(k_init, target, config, init_positions=init_positions)
-
-    step_fn_actual = step_jit if step_jit is not None else step_fn
-
     metrics_dict = {}
     particles_dict = {}
 
     checkpoint_set = set(checkpoints)
 
-    # Checkpoint 0: record metrics on init positions before any steps
-    if 0 in checkpoint_set:
-        particles_dict[0] = np.array(state.positions)
-        metrics_dict[0] = compute_metrics(
-            state.positions, target, metrics_list, ref_data,
-        )
+    use_scan = not debug and not DEBUG
 
-    t_start = time.perf_counter()
+    if use_scan:
+        # --- Scan path: fused lax.scan with buffer donation ---
+        segments = _compute_segments(checkpoints, n_iterations)
+        scan_runner = _make_jit_scan(step_fn, target, config)
 
-    for i in range(1, n_iterations + 1):
-        k_run, k_step = jax.random.split(k_run)
+        # Use numpy positions so each init_fn call creates a fresh JAX
+        # buffer — donation consumes the warmup buffer and we need a
+        # separate allocation for the real run.
+        init_positions_np = np.asarray(init_positions)
 
-        if is_baseline:
-            state, info = step_fn_actual(k_step, state, target, config)
-        else:
-            state, info = step_fn_actual(k_step, state, target, config)
+        # Warm-up: compile scan with a 1-step segment, then discard.
+        # This excludes JIT compilation time from the wall-clock measurement.
+        warmup_state = init_fn(k_init, target, config, init_positions=init_positions_np)
+        if segments:
+            _ = scan_runner(warmup_state, k_run, 1, 1)
+            jax.block_until_ready(_)
+            del warmup_state, _
 
-        if i in checkpoint_set:
-            positions_np = np.array(state.positions)
-            particles_dict[i] = positions_np
-            step_metrics = compute_metrics(
+        # Re-init state (warm-up consumed the buffer via donation)
+        state = init_fn(k_init, target, config, init_positions=init_positions_np)
+
+        # Checkpoint 0
+        if 0 in checkpoint_set:
+            particles_dict[0] = np.array(state.positions)
+            metrics_dict[0] = compute_metrics(
                 state.positions, target, metrics_list, ref_data,
             )
-            # Merge step diagnostics (coupling_ess, etc.) into metrics
-            for diag_name in ("coupling_ess",):
-                if diag_name in metrics_list and diag_name in info:
-                    step_metrics[diag_name] = float(info[diag_name])
-            metrics_dict[i] = step_metrics
 
-    wall_clock = time.perf_counter() - t_start
+        t_start = time.perf_counter()
+
+        for start, n_steps, ckpt in segments:
+            state = scan_runner(state, k_run, start, n_steps)
+            jax.block_until_ready(state)
+
+            positions_np = np.array(state.positions)
+            particles_dict[ckpt] = positions_np
+            metrics_dict[ckpt] = compute_metrics(
+                state.positions, target, metrics_list, ref_data,
+            )
+
+        wall_clock = time.perf_counter() - t_start
+
+    else:
+        # --- Debug path: Python loop, no JIT ---
+        state = init_fn(k_init, target, config, init_positions=init_positions)
+        step_fn_actual = step_jit if step_jit is not None else step_fn
+
+        if 0 in checkpoint_set:
+            particles_dict[0] = np.array(state.positions)
+            metrics_dict[0] = compute_metrics(
+                state.positions, target, metrics_list, ref_data,
+            )
+
+        t_start = time.perf_counter()
+
+        for i in range(1, n_iterations + 1):
+            k_step = jax.random.fold_in(k_run, i)
+            state, info = step_fn_actual(k_step, state, target, config)
+
+            if i in checkpoint_set:
+                positions_np = np.array(state.positions)
+                particles_dict[i] = positions_np
+                step_metrics = compute_metrics(
+                    state.positions, target, metrics_list, ref_data,
+                )
+                for diag_name in ("coupling_ess",):
+                    if diag_name in metrics_list and diag_name in info:
+                        step_metrics[diag_name] = float(info[diag_name])
+                metrics_dict[i] = step_metrics
+
+        wall_clock = time.perf_counter() - t_start
 
     return metrics_dict, particles_dict, wall_clock
 
@@ -596,12 +754,12 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     ref_key = jax.random.PRNGKey(99999)
     ref_data = get_reference_data(target, cfg, ref_key)
 
-    # --- Pre-compile step functions ---
-    # All step fns take (key, state, target, config) where target and config
-    # are Python objects → must be static for JIT.
+    # --- Pre-compile step functions (debug mode only) ---
+    # In scan mode, _make_jit_scan creates its own JIT closure.
     compiled_steps = {}
-    for label, config, init_fn, step_fn, is_bl in algo_configs:
-        compiled_steps[label] = maybe_jit(step_fn, static_argnums=(2, 3))
+    if DEBUG:
+        for label, config, init_fn, step_fn, is_bl in algo_configs:
+            compiled_steps[label] = step_fn  # raw, no JIT in debug
 
     # --- Run ---
     all_metrics = {}   # seed → algo → ckpt → {metric: val}
@@ -631,7 +789,8 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
                     k_run, target, config, init_fn, step_fn, is_bl,
                     init_positions, n_iters, checkpoints,
                     metrics_list, ref_data,
-                    step_jit=compiled_steps[label],
+                    step_jit=compiled_steps.get(label),
+                    debug=debug,
                 )
 
                 all_metrics.setdefault(seed, {})[label] = m_dict
