@@ -11,15 +11,15 @@ test/experiment gate. Do not proceed to the next phase until the gate passes.
 
 ### Deliverables
 
-- [ ] `types.py`: `Target` protocol, `ETDState` NamedTuple, `ETDConfig` dataclass
-- [ ] `costs/euclidean.py`: Squared Euclidean cost matrix, `(N,d) × (P,d) → (N,P)`
-- [ ] `costs/normalize.py`: Median heuristic normalization
-- [ ] `coupling/sinkhorn.py`: Log-domain balanced Sinkhorn with warm-start
-- [ ] `coupling/gibbs.py`: Closed-form Gibbs coupling (semi-relaxed)
-- [ ] `proposals/langevin.py`: Score-guided + score-free proposals, score clipping
-- [ ] `update/categorical.py`: Systematic resampling from log-coupling
-- [ ] `weights.py`: IS-corrected target weights (always on)
-- [ ] `weights.py`: IS-corrected target weights with proposal density evaluation and floor
+- [x] `types.py`: `Target` protocol, `ETDState` NamedTuple, `ETDConfig` dataclass
+- [x] `costs/euclidean.py`: Squared Euclidean cost matrix, `(N,d) × (P,d) → (N,P)`
+- [x] `costs/normalize.py`: Median heuristic normalization
+- [x] `coupling/sinkhorn.py`: Log-domain balanced Sinkhorn with warm-start
+- [x] `coupling/gibbs.py`: Closed-form Gibbs coupling (semi-relaxed)
+- [x] `proposals/langevin.py`: Score-guided + score-free proposals, score clipping
+- [x] `update/categorical.py`: Systematic resampling from log-coupling
+- [x] `weights.py`: IS-corrected target weights (always on)
+- [x] `weights.py`: IS-corrected target weights with proposal density evaluation and floor
 
 ### Gate
 
@@ -49,11 +49,11 @@ trivial target.
 
 ### Deliverables
 
-- [ ] `step.py`: The ~20-line step function (propose → cost → couple → update)
-- [ ] `targets/gaussian.py`: Single isotropic Gaussian
-- [ ] `targets/gmm.py`: 2D mixture of Gaussians (grid arrangement)
-- [ ] `diagnostics/metrics.py`: Energy distance, mode coverage, mean error
-- [ ] `figures/style.py`: Crimson palette, contour plot helpers
+- [x] `step.py`: The ~20-line step function (propose → cost → couple → update)
+- [x] `targets/gaussian.py`: Single isotropic Gaussian
+- [x] `targets/gmm.py`: 2D mixture of Gaussians (grid arrangement)
+- [x] `diagnostics/metrics.py`: Energy distance, mode coverage, mean error
+- [x] `figures/style.py`: Crimson palette, contour plot helpers
 
 ### Gate
 
@@ -78,14 +78,14 @@ so we can produce reproducible multi-algorithm benchmarks.
 
 ### Deliverables
 
-- [ ] `baselines/svgd.py`: SVGD with RBF kernel, median heuristic, Adam
-- [ ] `baselines/ula.py`: Unadjusted Langevin (N independent chains)
-- [ ] `baselines/mppi.py`: Importance-weighted averaging
-- [ ] `experiments/run.py`: YAML → config → run → save metrics + particles
-- [ ] Sweep expansion (list params → Cartesian product)
-- [ ] Rich terminal output (progress bars, summary tables)
-- [ ] `experiments/run.py`: main runner with sweep expansion, Rich output, `run_single()` factored out
-- [ ] `experiments/tune.py`: grid-search tuner reusing `run_single()`
+- [x] `baselines/svgd.py`: SVGD with RBF kernel, median heuristic, Adam
+- [x] `baselines/ula.py`: Unadjusted Langevin (N independent chains)
+- [x] `baselines/mppi.py`: Importance-weighted averaging
+- [x] `experiments/run.py`: YAML → config → run → save metrics + particles
+- [x] Sweep expansion (list params → Cartesian product)
+- [x] Rich terminal output (progress bars, summary tables)
+- [x] `experiments/run.py`: main runner with sweep expansion, Rich output, `run_single()` factored out
+- [x] `experiments/tune.py`: grid-search tuner reusing `run_single()`
 - [ ] `experiments/datasets.py`: DuckDB pipeline for UCI datasets (German Credit, Australian)
 - [ ] `data/etd.duckdb` created and populated.
 
@@ -109,11 +109,11 @@ that are the paper's main experimental axis. Test dimensional scaling.
 
 ### Deliverables
 
-- [ ] `costs/mahalanobis.py`: Diagonal Mahalanobis from preconditioner
-- [ ] `costs/linf.py`: $L_\infty$ cost
-- [ ] `coupling/unbalanced.py`: Log-domain unbalanced Sinkhorn
-- [ ] `proposals/langevin.py`: Add diagonal preconditioning path
-- [ ] DV feedback in `step.py` ($g$-potential → target weight augmentation)
+- [x] `costs/mahalanobis.py`: Diagonal Mahalanobis from preconditioner
+- [x] `costs/linf.py`: $L_\infty$ cost
+- [x] `coupling/unbalanced.py`: Log-domain unbalanced Sinkhorn
+- [x] `proposals/langevin.py`: Add diagonal preconditioning path
+- [x] DV feedback in `step.py` ($g$-potential → target weight augmentation)
 
 ### Gate
 
