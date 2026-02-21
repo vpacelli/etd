@@ -588,7 +588,7 @@ def run_single(
                 step_metrics = compute_metrics(
                     state.positions, target, metrics_list, ref_data,
                 )
-                for diag_name in ("coupling_ess",):
+                for diag_name in ("coupling_ess", "sinkhorn_iters"):
                     if diag_name in metrics_list and diag_name in info:
                         step_metrics[diag_name] = float(info[diag_name])
                 metrics_dict[i] = step_metrics
