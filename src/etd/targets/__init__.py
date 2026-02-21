@@ -1,11 +1,13 @@
 """Target distribution registry."""
 
+from etd.targets.banana import BananaTarget
 from etd.targets.gaussian import GaussianTarget
 from etd.targets.gmm import GMMTarget
 
 TARGETS = {
     "gaussian": GaussianTarget,
     "gmm": GMMTarget,
+    "banana": BananaTarget,
 }
 
 
@@ -13,7 +15,7 @@ def get_target(name: str, **params):
     """Instantiate a target distribution by name.
 
     Args:
-        name: Target name (``"gaussian"`` or ``"gmm"``).
+        name: Target name (e.g. ``"gaussian"``, ``"gmm"``, ``"banana"``).
         **params: Forwarded to the target constructor.
 
     Returns:
@@ -30,6 +32,7 @@ def get_target(name: str, **params):
 __all__ = [
     "TARGETS",
     "get_target",
+    "BananaTarget",
     "GaussianTarget",
     "GMMTarget",
 ]
