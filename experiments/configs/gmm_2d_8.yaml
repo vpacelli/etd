@@ -1,0 +1,78 @@
+experiment:
+  name: "gmm-2d-8"
+  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+  target:
+    type: "gmm"
+    params:
+      dim: 2
+      n_modes: 8
+      arrangement: "ring"
+      separation: 10.0
+      component_std: 1.0
+
+  shared:
+    n_particles: 100
+    n_iterations: 500
+    init:
+      type: "gaussian"
+      scale: 5.0
+
+  checkpoints: [0, 1, 5, 10, 25, 50, 100, 200, 500]
+
+  metrics:
+    - "energy_distance"
+    - "mode_coverage"
+    - "mean_error"
+
+  algorithms:
+    - label: "ETD-B"
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      use_score: true
+      epsilon: 0.1
+      alpha: 0.05
+
+    - label: "ETD-B-Linf"                                                                                                                                                                 
+      cost: "linf"
+      coupling: "balanced"
+      update: "categorical"
+      use_score: true
+      epsilon: 0.1
+      alpha: 0.05
+
+    # - label: "ETD-SR"
+    #   cost: "euclidean"
+    #   coupling: "gibbs"
+    #   update: "categorical"
+    #   use_score: true
+    #   epsilon: 0.1
+    #   alpha: 0.05
+
+    # - label: "ETD-B-SF"
+    #   cost: "euclidean"
+    #   coupling: "balanced"
+    #   update: "categorical"
+    #   use_score: false
+    #   epsilon: 0.1
+    #   alpha: 0.0
+
+    - label: "SVGD"
+      type: "baseline"
+      method: "svgd"
+      learning_rate: 0.1
+      score_clip: 5.0
+
+    - label: "ULA"
+      type: "baseline"
+      method: "ula"
+      step_size: 0.01
+      score_clip: 5.0
+
+    - label: "MPPI"
+      type: "baseline"
+      method: "mppi"
+      temperature: 1.0
+      sigma: 0.316
+      n_proposals: 25
