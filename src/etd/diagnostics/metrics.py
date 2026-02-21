@@ -44,32 +44,57 @@ def _pairwise_distances(
 def _mean_pairwise_distance(
     X: jnp.ndarray,  # (N, d)
     Y: jnp.ndarray,  # (M, d)
+    chunk_size: int = 256,
 ) -> jnp.ndarray:     # scalar
-    """Mean Euclidean distance between two point sets, O(M) memory.
+    """Mean Euclidean distance between two point sets, O(chunk·M) memory.
 
-    Computes ``mean(||x_i - y_j||)`` over all (i, j) pairs by vmapping
-    over rows of X, computing one (M,) distance vector at a time and
-    immediately reducing to a scalar.  Peak memory is O(max(N, M) · d)
-    instead of O(N · M).
+    Computes ``mean(||x_i - y_j||)`` over all (i, j) pairs by scanning
+    over chunks of X rows, computing a ``(chunk, M)`` distance block at
+    a time and immediately reducing to a scalar sum.  Peak memory is
+    O(chunk_size · M) instead of O(N · M).
+
+    Uses ``lax.scan`` (not vmap) to prevent XLA from fusing all rows
+    into one large allocation.
 
     Args:
         X: First point set, shape ``(N, d)``.
         Y: Second point set, shape ``(M, d)``.
+        chunk_size: Rows of X to process per scan step (default 256).
 
     Returns:
         Mean pairwise Euclidean distance (scalar).
     """
+    N = X.shape[0]
+    M = Y.shape[0]
     yy = jnp.sum(Y ** 2, axis=1)  # (M,) — precompute once
 
-    def _row_mean(x_i):
-        """Mean distance from a single point x_i to all of Y."""
-        # ||x_i - y_j||^2 = ||x_i||^2 + ||y_j||^2 - 2 x_i · y_j
-        sq = jnp.sum(x_i ** 2) + yy - 2.0 * (Y @ x_i)  # (M,)
-        return jnp.mean(jnp.sqrt(jnp.maximum(sq, 0.0)))
+    # Pad X to a multiple of chunk_size so scan has fixed-shape slices
+    n_chunks = (N + chunk_size - 1) // chunk_size
+    padded_n = n_chunks * chunk_size
+    X_pad = jnp.zeros((padded_n, X.shape[1]), dtype=X.dtype)
+    X_pad = X_pad.at[:N].set(X)
 
-    # vmap over rows of X, then average the per-row means
-    row_means = jax.vmap(_row_mean)(X)  # (N,)
-    return jnp.mean(row_means)
+    # Reshape into (n_chunks, chunk_size, d)
+    X_chunks = X_pad.reshape(n_chunks, chunk_size, -1)
+
+    def _chunk_sum(acc, x_chunk):
+        """Sum of distances from a chunk of rows to all of Y."""
+        # x_chunk: (chunk_size, d)
+        xx = jnp.sum(x_chunk ** 2, axis=1)          # (chunk_size,)
+        dots = x_chunk @ Y.T                         # (chunk_size, M)
+        sq = xx[:, None] + yy[None, :] - 2.0 * dots  # (chunk_size, M)
+        dists = jnp.sqrt(jnp.maximum(sq, 0.0))       # (chunk_size, M)
+        return acc + jnp.sum(dists), None
+
+    total, _ = jax.lax.scan(_chunk_sum, jnp.float32(0.0), X_chunks)
+
+    # Subtract contribution from padded rows (distance from zero-rows to Y)
+    if N < padded_n:
+        # Padded rows are zeros, their distances to Y are just ||y_j||
+        pad_contrib = (padded_n - N) * jnp.sum(jnp.sqrt(jnp.maximum(yy, 0.0)))
+        total = total - pad_contrib
+
+    return total / (N * M)
 
 
 # ---------------------------------------------------------------------------
