@@ -1,6 +1,7 @@
 """Target distribution registry."""
 
 from etd.targets.banana import BananaTarget
+from etd.targets.funnel import FunnelTarget
 from etd.targets.gaussian import GaussianTarget
 from etd.targets.gmm import GMMTarget
 
@@ -8,6 +9,7 @@ TARGETS = {
     "gaussian": GaussianTarget,
     "gmm": GMMTarget,
     "banana": BananaTarget,
+    "funnel": FunnelTarget,
 }
 
 
@@ -33,6 +35,7 @@ __all__ = [
     "TARGETS",
     "get_target",
     "BananaTarget",
+    "FunnelTarget",
     "GaussianTarget",
     "GMMTarget",
 ]
