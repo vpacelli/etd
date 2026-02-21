@@ -553,14 +553,11 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     ref_data = get_reference_data(target, cfg, ref_key)
 
     # --- Pre-compile step functions ---
+    # All step fns take (key, state, target, config) where target and config
+    # are Python objects → must be static for JIT.
     compiled_steps = {}
     for label, config, init_fn, step_fn, is_bl in algo_configs:
-        if is_bl:
-            compiled_steps[label] = maybe_jit(step_fn)
-        else:
-            compiled_steps[label] = maybe_jit(
-                step_fn, static_argnums=(2, 3)
-            )
+        compiled_steps[label] = maybe_jit(step_fn, static_argnums=(2, 3))
 
     # --- Run ---
     all_metrics = {}   # seed → algo → ckpt → {metric: val}

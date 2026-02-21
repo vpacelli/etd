@@ -136,10 +136,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
     for label, config, init_fn, step_fn, is_bl, entry in algo_configs:
         seed_vals = []
-        step_compiled = maybe_jit(
-            step_fn,
-            **({"static_argnums": (2, 3)} if not is_bl else {}),
-        )
+        step_compiled = maybe_jit(step_fn, static_argnums=(2, 3))
 
         for seed in seeds:
             key = jax.random.PRNGKey(seed)
