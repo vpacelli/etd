@@ -82,7 +82,11 @@ class TestEuclideanCost:
 
 class TestMedianNormalize:
     def test_output_median_is_one(self):
-        """After normalization, median of cost matrix should ≈ 1.0."""
+        """After normalization, median of cost matrix should ≈ 1.0.
+
+        Uses a loose tolerance because median_normalize uses a strided
+        subsample for speed (avoids O(n log n) sort on the full matrix).
+        """
         key = jax.random.PRNGKey(3)
         k1, k2 = jax.random.split(key)
         positions = jax.random.normal(k1, (50, 5))
@@ -91,7 +95,7 @@ class TestMedianNormalize:
         C = squared_euclidean_cost(positions, proposals)
         C_norm, med = median_normalize(C)
 
-        np.testing.assert_allclose(float(jnp.median(C_norm)), 1.0, atol=1e-5)
+        np.testing.assert_allclose(float(jnp.median(C_norm)), 1.0, atol=0.15)
         assert float(med) > 0.0
 
     def test_guards_against_zero_median(self):

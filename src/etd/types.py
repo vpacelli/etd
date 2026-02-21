@@ -111,7 +111,7 @@ class ETDConfig:
     # --- Coupling ---
     rho: float = 1.0            # unbalanced only: τ/ε
     sinkhorn_max_iter: int = 50
-    sinkhorn_tol: float = 1e-5
+    sinkhorn_tol: float = 1e-2
 
     # --- Update ---
     step_size: float = 1.0      # damping in (0, 1]
