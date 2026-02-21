@@ -22,6 +22,14 @@ import numpy as np
 import yaml
 from rich import box
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
 from experiments.run import (
@@ -134,27 +142,39 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     final_ckpt = max(checkpoints)
     results = {}  # label → list of metric values across seeds
 
-    for label, config, init_fn, step_fn, is_bl, entry in algo_configs:
-        seed_vals = []
-        step_compiled = maybe_jit(step_fn, static_argnums=(2, 3)) if debug else None
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        for label, config, init_fn, step_fn, is_bl, entry in algo_configs:
+            task_id = progress.add_task(f"  {label}", total=len(seeds))
+            seed_vals = []
+            step_compiled = maybe_jit(
+                step_fn, static_argnums=(2, 3),
+            ) if not debug else None
 
-        for seed in seeds:
-            key = jax.random.PRNGKey(seed)
-            k_init, k_run = jax.random.split(key)
-            init_pos = make_init_positions(k_init, target, shared)
+            for seed in seeds:
+                key = jax.random.PRNGKey(seed)
+                k_init, k_run = jax.random.split(key)
+                init_pos = make_init_positions(k_init, target, shared)
 
-            m_dict, _, wc = run_single(
-                k_run, target, config, init_fn, step_fn, is_bl,
-                init_pos, n_iters, [final_ckpt],
-                [rank_metric], ref_data,
-                step_jit=step_compiled,
-                debug=debug,
-            )
+                m_dict, _, wc = run_single(
+                    k_run, target, config, init_fn, step_fn, is_bl,
+                    init_pos, n_iters, [final_ckpt],
+                    [rank_metric], ref_data,
+                    step_jit=step_compiled,
+                    debug=debug,
+                )
 
-            val = m_dict.get(final_ckpt, {}).get(rank_metric, float("nan"))
-            seed_vals.append(val)
+                val = m_dict.get(final_ckpt, {}).get(rank_metric, float("nan"))
+                seed_vals.append(val)
+                progress.advance(task_id)
 
-        results[label] = seed_vals
+            results[label] = seed_vals
 
     # --- Rank ---
     rankings = []
