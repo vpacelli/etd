@@ -50,6 +50,8 @@ def run_nuts(
         - ``"ess"``: ``(d,)`` effective sample size per dimension.
         - ``"n_divergent"``: Total number of divergent transitions.
     """
+    import warnings
+
     import numpyro
     from numpyro.infer import MCMC, NUTS
 
@@ -61,16 +63,22 @@ def run_nuts(
         return -target.log_prob(theta[None])[0]
 
     kernel = NUTS(potential_fn=potential_fn)
-    mcmc = MCMC(
-        kernel,
-        num_warmup=n_warmup,
-        num_samples=n_samples,
-        num_chains=n_chains,
-        progress_bar=True,
-    )
+
+    # Suppress "not enough devices for parallel chains" warning — we
+    # expect sequential chains on single-GPU/CPU machines.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message="There are not enough devices")
+        mcmc = MCMC(
+            kernel,
+            num_warmup=n_warmup,
+            num_samples=n_samples,
+            num_chains=n_chains,
+            progress_bar=True,
+        )
 
     key = jax.random.PRNGKey(seed)
-    init_params = jnp.zeros(d)
+    # init_params must have leading dimension matching n_chains
+    init_params = jnp.zeros((n_chains, d))
     mcmc.run(key, init_params=init_params)
 
     # Get samples: dict with a single key or direct array
