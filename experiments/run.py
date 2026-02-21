@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import dataclasses
 import itertools
 import json
 import os
@@ -195,6 +196,15 @@ def build_algo_config(
             raw_cost = dict(raw_cost)  # copy to avoid mutating YAML entry
             kwargs["cost"] = raw_cost.pop("type")
             kwargs["cost_params"] = tuple(sorted(raw_cost.items()))
+
+        # Coerce YAML values to match ETDConfig field types.
+        # YAML parses '1e-3' as a string; this casts it to float.
+        _COERCE = {"float": float, "int": int, "bool": bool}
+        field_types = {f.name: f.type for f in dataclasses.fields(ETDConfig)}
+        for k, v in list(kwargs.items()):
+            coerce_fn = _COERCE.get(field_types.get(k, ""))
+            if coerce_fn is not None and not isinstance(v, coerce_fn):
+                kwargs[k] = coerce_fn(v)
 
         config = ETDConfig(**kwargs)
         return config, etd_init, etd_step, False
