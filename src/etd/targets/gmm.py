@@ -54,6 +54,30 @@ class GMMTarget:
             )
 
     # -----------------------------------------------------------------
+    # Derived statistics
+    # -----------------------------------------------------------------
+
+    @property
+    def mean(self) -> jnp.ndarray:
+        """Mixture mean, shape ``(d,)``."""
+        weights = jnp.exp(self.log_weights)  # (K,)
+        return jnp.sum(weights[:, None] * self.means, axis=0)
+
+    @property
+    def variance(self) -> jnp.ndarray:
+        """Per-dimension mixture variance, shape ``(d,)``.
+
+        Uses law of total variance:
+        ``Var[X] = E[σ²+μ²] − (E[μ])²``.
+        """
+        weights = jnp.exp(self.log_weights)  # (K,)
+        second_moment = jnp.sum(
+            weights[:, None] * (self.component_std ** 2 + self.means ** 2),
+            axis=0,
+        )
+        return second_moment - self.mean ** 2
+
+    # -----------------------------------------------------------------
     # Layout helpers
     # -----------------------------------------------------------------
 
