@@ -41,7 +41,8 @@ from rich.table import Table
 
 from etd.baselines import BASELINES, get_baseline
 from etd.diagnostics.metrics import (
-    energy_distance, mean_error, mode_coverage, sliced_wasserstein,
+    energy_distance, mean_error, mean_rmse, mode_coverage,
+    sliced_wasserstein, variance_ratio_vs_reference,
 )
 from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
@@ -388,7 +389,8 @@ def get_reference_data(
 ) -> Optional[jnp.ndarray]:
     """Get reference samples for computing metrics.
 
-    For synthetic targets with ``sample()``, draws ``n_ref`` samples.
+    Tries NUTS cache first (for real-data targets), then ``target.sample()``
+    for synthetic targets, then None.
 
     Args:
         target: Target distribution.
@@ -399,6 +401,19 @@ def get_reference_data(
     Returns:
         Reference samples ``(n_ref, d)`` or None.
     """
+    # Try NUTS cache first
+    try:
+        from experiments.nuts import load_reference
+        target_cfg = cfg.get("experiment", {}).get("target", {})
+        target_name = target_cfg.get("type", "")
+        target_params = target_cfg.get("params", {})
+        ref = load_reference(target_name, target_params)
+        if ref is not None:
+            return jnp.asarray(ref)
+    except (ImportError, Exception):
+        pass
+
+    # Fall back to exact sampling
     if hasattr(target, "sample"):
         return target.sample(key, n_ref)
     return None
@@ -419,6 +434,11 @@ METRIC_DISPATCH = {
     ) if hasattr(t, "means") else float("nan"),
     "mean_error": lambda p, t, ref: float(mean_error(p, t.mean))
         if hasattr(t, "mean") else float("nan"),
+    "mean_rmse": lambda p, t, ref: float(mean_rmse(p, ref))
+        if ref is not None else float("nan"),
+    "variance_ratio_ref": lambda p, t, ref: float(
+        variance_ratio_vs_reference(p, ref)
+    ) if ref is not None else float("nan"),
 }
 
 
