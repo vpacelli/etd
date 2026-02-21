@@ -102,7 +102,7 @@ First benchmark:
 
 ---
 
-## Phase 3: Cost Variants (the paper's contribution)
+## Phase 3: Cost Variants
 
 **Goal:** Implement the alternative cost functions and coupling variants
 that are the paper's main experimental axis. Test dimensional scaling.
