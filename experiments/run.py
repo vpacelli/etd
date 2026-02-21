@@ -170,8 +170,48 @@ def load_config(path: str) -> dict:
 # Sweep expansion
 # ---------------------------------------------------------------------------
 
+def _collect_sweep_axes(entry: dict, prefix: str = ""):
+    """Collect sweepable (list-valued) parameters, including nested dicts.
+
+    Args:
+        entry: Config dict (may contain nested dicts, e.g. ``cost``).
+        prefix: Dot-separated key prefix for nested dicts.
+
+    Returns:
+        List of ``(dotted_key, values_list)`` pairs.
+    """
+    axes = []
+    for k, v in entry.items():
+        full_key = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            axes.extend(_collect_sweep_axes(v, prefix=full_key))
+        elif isinstance(v, list) and k not in ("label",):
+            axes.append((full_key, v))
+    return axes
+
+
+def _set_nested(d: dict, dotted_key: str, value):
+    """Set a value in a nested dict using a dotted key path.
+
+    Intermediate dicts are copied so the original is not mutated.
+
+    Args:
+        d: Root dict.
+        dotted_key: Key path like ``"cost.c"``.
+        value: Value to set.
+    """
+    keys = dotted_key.split(".")
+    cur = d
+    for k in keys[:-1]:
+        cur[k] = dict(cur[k])  # shallow copy intermediate
+        cur = cur[k]
+    cur[keys[-1]] = value
+
+
 def expand_algo_sweeps(entry: dict) -> List[dict]:
     """Expand list-valued parameters into a Cartesian product of configs.
+
+    Supports nested dicts (e.g. ``cost: {type: imq, c: [0.5, 1.0]}``).
 
     Args:
         entry: A single algorithm entry from the YAML config.
@@ -179,22 +219,26 @@ def expand_algo_sweeps(entry: dict) -> List[dict]:
     Returns:
         List of concrete entries (one per sweep point).
     """
-    sweep_keys = []
-    sweep_vals = []
+    axes = _collect_sweep_axes(entry)
 
-    for k, v in entry.items():
-        if isinstance(v, list) and k not in ("label",):
-            sweep_keys.append(k)
-            sweep_vals.append(v)
-
-    if not sweep_keys:
+    if not axes:
         return [entry]
+
+    sweep_keys = [k for k, _ in axes]
+    sweep_vals = [v for _, v in axes]
 
     expanded = []
     for combo in itertools.product(*sweep_vals):
         new_entry = dict(entry)
+        # Deep-copy any nested dicts that contain sweep axes
+        for k, v in entry.items():
+            if isinstance(v, dict):
+                new_entry[k] = dict(v)
         for k, v in zip(sweep_keys, combo):
-            new_entry[k] = v
+            if "." in k:
+                _set_nested(new_entry, k, v)
+            else:
+                new_entry[k] = v
         expanded.append(new_entry)
 
     return expanded
@@ -211,19 +255,26 @@ def build_algo_label(base_label: str, entry: dict, original: dict) -> str:
     Returns:
         Label like ``"ETD-B_eps=0.05"`` or just ``"ETD-B"`` if no sweep.
     """
+    abbrevs = {
+        "epsilon": "eps",
+        "learning_rate": "lr",
+        "step_size": "h",
+        "temperature": "T",
+        "n_proposals": "M",
+        "bandwidth": "bw",
+    }
+
+    sweep_axes = _collect_sweep_axes(original)
     suffixes = []
-    for k, v in original.items():
-        if isinstance(v, list) and k not in ("label",):
-            # Abbreviate parameter names for readability
-            abbrev = {
-                "epsilon": "eps",
-                "learning_rate": "lr",
-                "step_size": "h",
-                "temperature": "T",
-                "n_proposals": "M",
-                "bandwidth": "bw",
-            }.get(k, k)
-            suffixes.append(f"{abbrev}={entry[k]}")
+    for dotted_key, _ in sweep_axes:
+        # Use the leaf key name for abbreviation and value lookup
+        leaf = dotted_key.split(".")[-1]
+        abbrev = abbrevs.get(leaf, leaf)
+        # Resolve value from the expanded entry
+        val = entry
+        for part in dotted_key.split("."):
+            val = val[part]
+        suffixes.append(f"{abbrev}={val}")
 
     if suffixes:
         return f"{base_label}_{'_'.join(suffixes)}"
