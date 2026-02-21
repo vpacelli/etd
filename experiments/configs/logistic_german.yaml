@@ -1,0 +1,45 @@
+experiment:
+  name: "logistic-german"
+  seeds: [0, 1, 2, 3, 4]
+
+  target:
+    type: "logistic"
+    params:
+      dataset: "german_credit"
+      prior_std: 5.0
+
+  shared:
+    n_particles: 200
+    n_iterations: 1000
+    init:
+      type: "gaussian"
+      scale: 0.1
+
+  checkpoints: [0, 10, 50, 100, 250, 500, 1000]
+
+  metrics:
+    - "mean_rmse"
+    - "variance_ratio_ref"
+    - "mean_error"
+
+  algorithms:
+    - label: "ETD-B"
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      use_score: true
+      epsilon: 0.1
+      alpha: 0.01
+      score_clip: 5.0
+
+    - label: "SVGD"
+      type: "baseline"
+      method: "svgd"
+      learning_rate: 0.01
+      score_clip: 5.0
+
+    - label: "ULA"
+      type: "baseline"
+      method: "ula"
+      step_size: 0.001
+      score_clip: 5.0
