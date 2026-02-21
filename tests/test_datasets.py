@@ -75,6 +75,38 @@ class TestAustralian:
         assert y.shape == (690,)
 
 
+class TestIonosphere:
+    @pytest.mark.slow
+    def test_download_store_load(self, temp_db):
+        """Full roundtrip: download → store → load."""
+        from experiments.datasets import (
+            download_and_store_ionosphere,
+            get_connection,
+            load_dataset,
+        )
+
+        con = get_connection()
+        n = download_and_store_ionosphere(con)
+        con.close()
+
+        assert n == 351  # Ionosphere has 351 samples
+
+        X, y = load_dataset("ionosphere")
+        assert X.shape == (351, 33)  # 34 features minus 1 constant (a02)
+        assert y.shape == (351,)
+        assert X.dtype == np.float64
+        assert y.dtype == np.int32
+
+        # Standardized: mean ~0
+        np.testing.assert_allclose(X.mean(axis=0), 0.0, atol=0.1)
+
+        # No constant columns remain
+        assert np.all(X.std(axis=0) > 0.1)
+
+        # Labels are binary
+        assert set(np.unique(y)).issubset({0, 1})
+
+
 # ---------------------------------------------------------------------------
 # Table listing and missing table
 # ---------------------------------------------------------------------------
