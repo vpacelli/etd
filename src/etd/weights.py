@@ -35,23 +35,31 @@ def _log_proposal_density(
     Returns:
         Log mixture density at each proposal, shape ``(P,)``.
     """
-    P, d = proposals.shape
+    d = proposals.shape[1]
     N = means.shape[0]
 
-    # --- Compute per-component log densities ---
-    # diff[p, n, :] = y_p - μ_n
-    diff = proposals[:, None, :] - means[None, :, :]   # (P, N, d)
-
+    # --- Compute per-component Mahalanobis distances ---
+    # Uses ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ to avoid (P,N,d) intermediate.
+    # Floors at zero to prevent negative values from float cancellation.
     if preconditioner is not None:
         # Preconditioned covariance: Σ = diag(σ² P²)
-        # Mahalanobis: (y - μ)ᵀ Σ⁻¹ (y - μ) = Σ_k (diff_k / (σ P_k))²
-        inv_std = 1.0 / (sigma * preconditioner)                     # (d,)
-        maha_sq = jnp.sum((diff * inv_std[None, None, :]) ** 2, axis=-1)  # (P, N)
+        # Pre-whiten: z = x / (σP), then Mahalanobis = ||z_y - z_μ||²
+        inv_std = 1.0 / (sigma * preconditioner)                      # (d,)
+        z_y = proposals * inv_std[None, :]                             # (P, d)
+        z_mu = means * inv_std[None, :]                                # (N, d)
+        yy = jnp.sum(z_y ** 2, axis=1)                                # (P,)
+        mm = jnp.sum(z_mu ** 2, axis=1)                               # (N,)
+        ym = z_y @ z_mu.T                                             # (P, N)
+        maha_sq = jnp.maximum(yy[:, None] + mm[None, :] - 2.0 * ym, 0.0)  # (P, N)
         # Log-determinant: -½ Σ_k log(2π σ² P_k²)
         log_det_term = -0.5 * jnp.sum(jnp.log(2.0 * jnp.pi * (sigma * preconditioner) ** 2))
     else:
         # Isotropic: Σ = σ²I
-        maha_sq = jnp.sum(diff ** 2, axis=-1) / (sigma ** 2)   # (P, N)
+        yy = jnp.sum(proposals ** 2, axis=1)                          # (P,)
+        mm = jnp.sum(means ** 2, axis=1)                              # (N,)
+        ym = proposals @ means.T                                      # (P, N)
+        sq_dist = jnp.maximum(yy[:, None] + mm[None, :] - 2.0 * ym, 0.0)
+        maha_sq = sq_dist / (sigma ** 2)                              # (P, N)
         log_det_term = -0.5 * d * jnp.log(2.0 * jnp.pi * sigma ** 2)
 
     # log N(y; μ_n, Σ) = log_det_term - 0.5 * maha_sq

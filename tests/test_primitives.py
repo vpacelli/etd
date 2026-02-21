@@ -18,7 +18,7 @@ from etd.costs.euclidean import squared_euclidean_cost
 from etd.costs.normalize import median_normalize
 from etd.proposals.langevin import clip_scores, langevin_proposals, update_preconditioner
 from etd.update.categorical import systematic_resample
-from etd.weights import importance_weights
+from etd.weights import _log_proposal_density, importance_weights
 
 
 # ---------------------------------------------------------------------------
@@ -279,3 +279,70 @@ class TestDeterminism:
         np.testing.assert_array_equal(np.array(p1), np.array(p2))
         np.testing.assert_array_equal(np.array(m1), np.array(m2))
         np.testing.assert_array_equal(np.array(s1), np.array(s2))
+
+
+# ---------------------------------------------------------------------------
+# BLAS-friendly proposal density
+# ---------------------------------------------------------------------------
+
+def _log_proposal_density_naive(proposals, means, sigma, preconditioner=None):
+    """Naive (P,N,d) reference implementation for numerical comparison."""
+    d = proposals.shape[1]
+    N = means.shape[0]
+    diff = proposals[:, None, :] - means[None, :, :]  # (P, N, d)
+    if preconditioner is not None:
+        inv_std = 1.0 / (sigma * preconditioner)
+        maha_sq = jnp.sum((diff * inv_std[None, None, :]) ** 2, axis=-1)
+        log_det = -0.5 * jnp.sum(jnp.log(2 * jnp.pi * (sigma * preconditioner) ** 2))
+    else:
+        maha_sq = jnp.sum(diff ** 2, axis=-1) / (sigma ** 2)
+        log_det = -0.5 * d * jnp.log(2 * jnp.pi * sigma ** 2)
+    log_components = log_det - 0.5 * maha_sq
+    from jax.scipy.special import logsumexp
+    return logsumexp(log_components, axis=1) - jnp.log(N)
+
+
+class TestBLASDensity:
+    """Verify BLAS-friendly proposal density matches naive reference."""
+
+    def test_isotropic(self):
+        """Isotropic (no preconditioner) path matches naive reference."""
+        key = jax.random.PRNGKey(100)
+        k1, k2 = jax.random.split(key)
+        P, N, d = 200, 30, 8
+        proposals = jax.random.normal(k1, (P, d))
+        means = jax.random.normal(k2, (N, d))
+        sigma = 0.5
+
+        blas = _log_proposal_density(proposals, means, sigma)
+        naive = _log_proposal_density_naive(proposals, means, sigma)
+        np.testing.assert_allclose(np.array(blas), np.array(naive), atol=1e-5)
+
+    def test_preconditioned(self):
+        """Preconditioned path matches naive reference."""
+        key = jax.random.PRNGKey(101)
+        k1, k2, k3 = jax.random.split(key, 3)
+        P, N, d = 200, 30, 8
+        proposals = jax.random.normal(k1, (P, d))
+        means = jax.random.normal(k2, (N, d))
+        sigma = 0.3
+        precond = jnp.abs(jax.random.normal(k3, (d,))) + 0.1
+
+        blas = _log_proposal_density(proposals, means, sigma, preconditioner=precond)
+        naive = _log_proposal_density_naive(proposals, means, sigma, preconditioner=precond)
+        # Relaxed tolerance: different accumulation order causes ~1e-4 float32
+        # cancellation on values of magnitude ~100.
+        np.testing.assert_allclose(np.array(blas), np.array(naive), atol=5e-4)
+
+    def test_high_dim(self):
+        """BLAS path accurate in higher dimensions where cancellation matters."""
+        key = jax.random.PRNGKey(102)
+        k1, k2 = jax.random.split(key)
+        P, N, d = 100, 20, 50
+        proposals = jax.random.normal(k1, (P, d)) * 0.1
+        means = jax.random.normal(k2, (N, d)) * 0.1
+        sigma = 0.2
+
+        blas = _log_proposal_density(proposals, means, sigma)
+        naive = _log_proposal_density_naive(proposals, means, sigma)
+        np.testing.assert_allclose(np.array(blas), np.array(naive), atol=1e-4)
