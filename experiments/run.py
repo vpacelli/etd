@@ -347,6 +347,13 @@ def run_single(
 
     checkpoint_set = set(checkpoints)
 
+    # Checkpoint 0: record metrics on init positions before any steps
+    if 0 in checkpoint_set:
+        particles_dict[0] = np.array(state.positions)
+        metrics_dict[0] = compute_metrics(
+            state.positions, target, metrics_list, ref_data,
+        )
+
     t_start = time.perf_counter()
 
     for i in range(1, n_iterations + 1):
