@@ -1,4 +1,4 @@
-"""Cost matrix normalization via the median heuristic."""
+"""Cost matrix normalization (median or mean heuristic)."""
 
 from typing import Tuple
 
@@ -39,3 +39,49 @@ def median_normalize(
     median = jnp.median(flat[::stride])
     median = jnp.maximum(median, 1e-8)
     return C / median, median
+
+
+def mean_normalize(
+    C: jnp.ndarray,   # (N, P)
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Normalize cost matrix so that its mean equals 1.
+
+    Cheaper than median (O(n) vs O(n log n) sort) but less robust
+    to outliers.
+
+    Guards against a zero or near-zero mean.
+
+    Args:
+        C: Raw cost matrix, shape ``(N, P)``.
+
+    Returns:
+        Tuple of (normalized cost, mean scalar).
+    """
+    mean = jnp.maximum(jnp.mean(C), 1e-8)
+    return C / mean, mean
+
+
+def normalize_cost(
+    C: jnp.ndarray,        # (N, P)
+    method: str = "median",
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Normalize cost matrix using the specified method.
+
+    Dispatches to :func:`median_normalize` or :func:`mean_normalize`.
+
+    Args:
+        C: Raw cost matrix, shape ``(N, P)``.
+        method: ``"median"`` (default) or ``"mean"``.
+
+    Returns:
+        Tuple of (normalized cost, scale scalar).
+
+    Raises:
+        ValueError: If *method* is not recognized.
+    """
+    if method == "median":
+        return median_normalize(C)
+    elif method == "mean":
+        return mean_normalize(C)
+    else:
+        raise ValueError(f"Unknown cost normalization method '{method}'.")

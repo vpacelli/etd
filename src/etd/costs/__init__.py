@@ -6,7 +6,7 @@ from etd.costs.euclidean import squared_euclidean_cost
 from etd.costs.imq import imq_cost
 from etd.costs.linf import linf_cost
 from etd.costs.mahalanobis import mahalanobis_cost
-from etd.costs.normalize import median_normalize
+from etd.costs.normalize import mean_normalize, median_normalize, normalize_cost
 
 COSTS = {
     "euclidean": squared_euclidean_cost,
@@ -55,5 +55,7 @@ __all__ = [
     "mahalanobis_cost",
     "linf_cost",
     "imq_cost",
+    "mean_normalize",
     "median_normalize",
+    "normalize_cost",
 ]

@@ -101,8 +101,8 @@ class TestStep:
 
         assert "sinkhorn_iters_cross" in info
         assert "sinkhorn_iters_self" in info
-        assert "cost_median_cross" in info
-        assert "cost_median_self" in info
+        assert "cost_scale_cross" in info
+        assert "cost_scale_self" in info
 
 
 # ---------------------------------------------------------------------------

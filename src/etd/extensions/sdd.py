@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 
-from etd.costs import build_cost_fn, median_normalize
+from etd.costs import build_cost_fn, normalize_cost
 from etd.coupling import sinkhorn_log_domain
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.schedule import Schedule, resolve_param
@@ -73,6 +73,7 @@ class SDDConfig:
     # --- Composable axes ---
     cost: str = "euclidean"
     cost_params: tuple = ()
+    cost_normalize: str = "median"   # "median" or "mean"
 
     # --- Core ---
     epsilon: float = 0.1
@@ -246,7 +247,7 @@ def step(
     # 1d. Cost matrix (cross)
     cost_fn = build_cost_fn(config.cost, config.cost_params)
     C_cross = cost_fn(state.positions, proposals, preconditioner=preconditioner)
-    C_cross, cost_median_cross = median_normalize(C_cross)
+    C_cross, cost_scale_cross = normalize_cost(C_cross, config.cost_normalize)
 
     # 1e. Source marginal (uniform)
     log_a = -jnp.log(N) * jnp.ones(N)
@@ -276,7 +277,7 @@ def step(
 
     # 2a. Self-cost matrix
     C_self = cost_fn(state.positions, state.positions, preconditioner=preconditioner)
-    C_self, cost_median_self = median_normalize(C_self)
+    C_self, cost_scale_self = normalize_cost(C_self, config.cost_normalize)
 
     # 2b. Uniform marginals for self-coupling
     log_a_self = -jnp.log(N) * jnp.ones(N)
@@ -326,8 +327,8 @@ def step(
     info = {
         "sinkhorn_iters_cross": cross_iters,
         "sinkhorn_iters_self": self_iters,
-        "cost_median_cross": cost_median_cross,
-        "cost_median_self": cost_median_self,
+        "cost_scale_cross": cost_scale_cross,
+        "cost_scale_self": cost_scale_self,
     }
 
     return new_state, info

@@ -15,7 +15,7 @@ from scipy.spatial.distance import cdist
 from scipy.stats import chisquare
 
 from etd.costs.euclidean import squared_euclidean_cost
-from etd.costs.normalize import median_normalize
+from etd.costs.normalize import mean_normalize, median_normalize, normalize_cost
 from etd.proposals.langevin import clip_scores, langevin_proposals, update_preconditioner
 from etd.update.categorical import systematic_resample
 from etd.weights import _log_proposal_density, importance_weights
@@ -105,6 +105,71 @@ class TestMedianNormalize:
 
         assert jnp.all(jnp.isfinite(C_norm))
         assert float(med) > 0.0  # guard prevents division by zero
+
+
+# ---------------------------------------------------------------------------
+# Gate: Mean normalization
+# ---------------------------------------------------------------------------
+
+class TestMeanNormalize:
+    def test_output_mean_is_one(self):
+        """After normalization, mean of cost matrix should ≈ 1.0."""
+        key = jax.random.PRNGKey(30)
+        k1, k2 = jax.random.split(key)
+        positions = jax.random.normal(k1, (50, 5))
+        proposals = jax.random.normal(k2, (100, 5))
+
+        C = squared_euclidean_cost(positions, proposals)
+        C_norm, mean_val = mean_normalize(C)
+
+        np.testing.assert_allclose(float(jnp.mean(C_norm)), 1.0, atol=1e-5)
+        assert float(mean_val) > 0.0
+
+    def test_guards_against_zero_mean(self):
+        """Normalization should not produce inf when cost is all zeros."""
+        C = jnp.zeros((10, 20))
+        C_norm, mean_val = mean_normalize(C)
+
+        assert jnp.all(jnp.isfinite(C_norm))
+        assert float(mean_val) > 0.0
+
+
+# ---------------------------------------------------------------------------
+# Gate: normalize_cost dispatcher
+# ---------------------------------------------------------------------------
+
+class TestNormalizeCostDispatch:
+    def test_median_dispatch(self):
+        """normalize_cost('median') matches median_normalize."""
+        key = jax.random.PRNGKey(31)
+        k1, k2 = jax.random.split(key)
+        C = squared_euclidean_cost(
+            jax.random.normal(k1, (20, 3)),
+            jax.random.normal(k2, (40, 3)),
+        )
+        C_disp, s_disp = normalize_cost(C, "median")
+        C_ref, s_ref = median_normalize(C)
+        np.testing.assert_array_equal(np.array(C_disp), np.array(C_ref))
+        np.testing.assert_array_equal(np.array(s_disp), np.array(s_ref))
+
+    def test_mean_dispatch(self):
+        """normalize_cost('mean') matches mean_normalize."""
+        key = jax.random.PRNGKey(32)
+        k1, k2 = jax.random.split(key)
+        C = squared_euclidean_cost(
+            jax.random.normal(k1, (20, 3)),
+            jax.random.normal(k2, (40, 3)),
+        )
+        C_disp, s_disp = normalize_cost(C, "mean")
+        C_ref, s_ref = mean_normalize(C)
+        np.testing.assert_array_equal(np.array(C_disp), np.array(C_ref))
+        np.testing.assert_array_equal(np.array(s_disp), np.array(s_ref))
+
+    def test_unknown_method_raises(self):
+        """Unknown method should raise ValueError."""
+        C = jnp.ones((5, 5))
+        with pytest.raises(ValueError, match="Unknown cost normalization"):
+            normalize_cost(C, "unknown")
 
 
 # ---------------------------------------------------------------------------

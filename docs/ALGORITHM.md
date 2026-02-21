@@ -131,17 +131,42 @@ dimensions (controlled by max rather than sum). The Gibbs kernel
 $\exp(-\|x-y\|_\infty / \varepsilon)$ produces softer, more informative
 couplings in high $d$.
 
-### Cost Normalization (Median Heuristic)
+### Cost Normalization
 
-After computing the raw cost matrix, normalize to unit median:
+After computing the raw cost matrix, normalize to a unit statistic so that
+$\varepsilon$ is interpretable across problems and iterations:
+$\varepsilon = 0.1$ always means "10% of the typical pairwise cost."
+
+Two methods are available, selected by ``cost_normalize`` in the config:
+
+| Method | Default? | Statistic | Complexity | Notes |
+|--------|----------|-----------|------------|-------|
+| ``"median"`` | Yes | median(C) | O(n log n) sort | Robust to outliers; uses strided subsample for speed |
+| ``"mean"`` | No | mean(C) | O(n) | Cheaper; less robust to heavy tails |
 
 ```python
+# median (default)
 C_med = median(C)
 C = C / max(C_med, 1e-8)
+
+# mean
+C_mean = mean(C)
+C = C / max(C_mean, 1e-8)
 ```
 
-This makes $\varepsilon$ interpretable across problems and iterations:
-$\varepsilon = 0.1$ always means "10% of the typical pairwise cost."
+Both methods guard against zero or near-zero scales. The info dict reports
+the computed scale as ``"cost_scale"`` (ETD) or ``"cost_scale_cross"`` /
+``"cost_scale_self"`` (SDD).
+
+**YAML usage:**
+
+```yaml
+algorithms:
+  - label: "ETD-B"
+    coupling: "balanced"
+    cost_normalize: "mean"     # optional, defaults to "median"
+    epsilon: 0.1
+```
 
 ### Future Cost Functions
 

@@ -158,7 +158,7 @@ class TestStep:
         assert jnp.all(jnp.isfinite(new_state.dual_g))
 
         assert "sinkhorn_iters" in info
-        assert "cost_median" in info
+        assert "cost_scale" in info
 
     def test_determinism(self, gaussian_target, balanced_config):
         """Same key + state should produce identical output."""

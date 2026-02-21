@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 
-from etd.costs import build_cost_fn, median_normalize
+from etd.costs import build_cost_fn, normalize_cost
 from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalanced
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.schedule import resolve_param
@@ -99,7 +99,7 @@ def step(
         Tuple ``(new_state, info)`` where:
         - ``new_state``: Updated :class:`ETDState`.
         - ``info``: Dict with diagnostic keys:
-          ``"sinkhorn_iters"``, ``"cost_median"``, ``"coupling_ess"``.
+          ``"sinkhorn_iters"``, ``"cost_scale"``, ``"coupling_ess"``.
     """
     if config.cost == "mahalanobis" and not config.precondition:
         raise ValueError("Mahalanobis cost requires precondition=True")
@@ -152,8 +152,8 @@ def step(
     cost_fn = build_cost_fn(config.cost, config.cost_params)
     C = cost_fn(state.positions, proposals, preconditioner=preconditioner)  # (N, N*M)
 
-    # --- 4. Median normalize ---
-    C, cost_median = median_normalize(C)
+    # --- 4. Normalize cost ---
+    C, cost_scale = normalize_cost(C, config.cost_normalize)
 
     # --- 5. Source marginal (uniform) ---
     log_a = -jnp.log(N) * jnp.ones(N)
@@ -222,7 +222,7 @@ def step(
 
     info = {
         "sinkhorn_iters": sinkhorn_iters,
-        "cost_median": cost_median,
+        "cost_scale": cost_scale,
         "coupling_ess": coupling_ess,
     }
 
