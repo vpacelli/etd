@@ -126,9 +126,6 @@ class ETDConfig:
     dv_feedback: bool = False
     dv_weight: float = 1.0
 
-    # --- SDD ---
-    sdd: bool = False
-
     # --- Schedules ---
     schedules: tuple = ()  # (("dv_weight", Schedule(...)), ("epsilon", Schedule(...)), ...)
 

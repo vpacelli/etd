@@ -1,9 +1,11 @@
 """Update rule registry."""
 
+from etd.update.barycentric import barycentric_update
 from etd.update.categorical import systematic_resample
 
 UPDATES = {
     "categorical": systematic_resample,
+    "barycentric": barycentric_update,
 }
 
 
@@ -21,5 +23,6 @@ def get_update_fn(name: str):
 __all__ = [
     "UPDATES",
     "get_update_fn",
+    "barycentric_update",
     "systematic_resample",
 ]

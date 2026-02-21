@@ -20,7 +20,7 @@ from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalance
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.schedule import resolve_param
 from etd.types import ETDConfig, ETDState, Target
-from etd.update import systematic_resample
+from etd.update import get_update_fn
 from etd.weights import importance_weights
 
 
@@ -188,13 +188,14 @@ def step(
     else:
         raise ValueError(f"Unknown coupling '{config.coupling}'")
 
-    # --- 7. Update (systematic resampling) ---
-    new_positions = systematic_resample(
+    # --- 7. Update (dispatch by config.update) ---
+    update_fn = get_update_fn(config.update)
+    new_positions = update_fn(
         key_update,
         log_gamma,
         proposals,
         step_size=step_size,
-        positions=state.positions if config.step_size < 1.0 else None,
+        positions=state.positions,
     )
 
     # --- 8. Preconditioner accumulator update ---
