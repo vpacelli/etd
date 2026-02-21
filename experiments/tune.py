@@ -44,7 +44,7 @@ console = Console()
 # Metric direction
 # ---------------------------------------------------------------------------
 
-LOWER_IS_BETTER = {"energy_distance", "mean_error"}
+LOWER_IS_BETTER = {"energy_distance", "sliced_wasserstein", "mean_error"}
 HIGHER_IS_BETTER = {"mode_coverage"}
 
 
@@ -136,7 +136,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
     for label, config, init_fn, step_fn, is_bl, entry in algo_configs:
         seed_vals = []
-        step_compiled = maybe_jit(step_fn, static_argnums=(2, 3))
+        step_compiled = maybe_jit(step_fn, static_argnums=(2, 3)) if debug else None
 
         for seed in seeds:
             key = jax.random.PRNGKey(seed)
@@ -148,6 +148,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
                 init_pos, n_iters, [final_ckpt],
                 [rank_metric], ref_data,
                 step_jit=step_compiled,
+                debug=debug,
             )
 
             val = m_dict.get(final_ckpt, {}).get(rank_metric, float("nan"))

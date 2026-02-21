@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from experiments.run import (
+    _compute_segments,
     build_algo_config,
     build_algo_label,
     compute_metrics,
@@ -266,3 +267,52 @@ class TestLoadConfig:
         assert cfg["experiment"]["name"] == "gmm-2d-4"
         assert len(cfg["experiment"]["seeds"]) == 5
         assert len(cfg["experiment"]["algorithms"]) == 6
+
+
+# ---------------------------------------------------------------------------
+# Scan runner segments
+# ---------------------------------------------------------------------------
+
+class TestComputeSegments:
+    def test_basic(self):
+        """Two checkpoints produce two contiguous segments."""
+        segs = _compute_segments([5, 10], n_iterations=10)
+        assert segs == [(1, 5, 5), (6, 5, 10)]
+
+    def test_single_checkpoint(self):
+        """Single checkpoint at the end."""
+        segs = _compute_segments([100], n_iterations=100)
+        assert segs == [(1, 100, 100)]
+
+    def test_checkpoint_zero_filtered(self):
+        """Checkpoint 0 is filtered out (handled separately)."""
+        segs = _compute_segments([0, 50], n_iterations=50)
+        assert segs == [(1, 50, 50)]
+
+    def test_beyond_n_iter_dropped(self):
+        """Checkpoints beyond n_iterations are dropped."""
+        segs = _compute_segments([5, 10, 200], n_iterations=10)
+        assert segs == [(1, 5, 5), (6, 5, 10)]
+
+    def test_empty_checkpoints(self):
+        """Empty checkpoint list returns empty segments."""
+        segs = _compute_segments([], n_iterations=100)
+        assert segs == []
+
+    def test_contiguity(self):
+        """Segments are contiguous: sum of n_steps == last checkpoint."""
+        ckpts = [50, 100, 200, 500]
+        segs = _compute_segments(ckpts, n_iterations=500)
+        total_steps = sum(n for _, n, _ in segs)
+        assert total_steps == 500
+        # Verify contiguity
+        for i, (start, n, ckpt) in enumerate(segs):
+            assert start + n - 1 == ckpt
+            if i > 0:
+                prev_end = segs[i - 1][2]
+                assert start == prev_end + 1
+
+    def test_unsorted_input(self):
+        """Unsorted checkpoints are handled correctly."""
+        segs = _compute_segments([10, 5], n_iterations=10)
+        assert segs == [(1, 5, 5), (6, 5, 10)]
