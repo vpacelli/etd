@@ -1,10 +1,14 @@
 """Cost function registry."""
 
 from etd.costs.euclidean import squared_euclidean_cost
+from etd.costs.linf import linf_cost
+from etd.costs.mahalanobis import mahalanobis_cost
 from etd.costs.normalize import median_normalize
 
 COSTS = {
     "euclidean": squared_euclidean_cost,
+    "mahalanobis": mahalanobis_cost,
+    "linf": linf_cost,
 }
 
 
@@ -23,5 +27,7 @@ __all__ = [
     "COSTS",
     "get_cost_fn",
     "squared_euclidean_cost",
+    "mahalanobis_cost",
+    "linf_cost",
     "median_normalize",
 ]

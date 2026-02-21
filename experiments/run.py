@@ -367,9 +367,14 @@ def run_single(
         if i in checkpoint_set:
             positions_np = np.array(state.positions)
             particles_dict[i] = positions_np
-            metrics_dict[i] = compute_metrics(
+            step_metrics = compute_metrics(
                 state.positions, target, metrics_list, ref_data,
             )
+            # Merge step diagnostics (coupling_ess, etc.) into metrics
+            for diag_name in ("coupling_ess",):
+                if diag_name in metrics_list and diag_name in info:
+                    step_metrics[diag_name] = float(info[diag_name])
+            metrics_dict[i] = step_metrics
 
     wall_clock = time.perf_counter() - t_start
 

@@ -13,9 +13,10 @@ from typing import Dict, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
+from jax.scipy.special import logsumexp
 
 from etd.costs import get_cost_fn, median_normalize
-from etd.coupling import gibbs_coupling, sinkhorn_log_domain
+from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalanced
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.types import ETDConfig, ETDState, Target
 from etd.update import systematic_resample
@@ -78,8 +79,11 @@ def step(
         Tuple ``(new_state, info)`` where:
         - ``new_state``: Updated :class:`ETDState`.
         - ``info``: Dict with diagnostic keys:
-          ``"sinkhorn_iters"``, ``"cost_median"``.
+          ``"sinkhorn_iters"``, ``"cost_median"``, ``"coupling_ess"``.
     """
+    if config.cost == "mahalanobis" and not config.precondition:
+        raise ValueError("Mahalanobis cost requires precondition=True")
+
     N = config.n_particles
     key_propose, key_update = jax.random.split(key)
 
@@ -111,9 +115,15 @@ def step(
         preconditioner=preconditioner,
     )
 
+    # --- 2b. DV feedback: augment target weights with dual potential ---
+    # Uses g from *previous* iteration; on first step dual_g = zeros → no effect.
+    if config.dv_feedback:
+        log_b = log_b - config.dv_weight * state.dual_g
+        log_b = log_b - logsumexp(log_b)
+
     # --- 3. Cost matrix ---
     cost_fn = get_cost_fn(config.cost)
-    C = cost_fn(state.positions, proposals)  # (N, N*M)
+    C = cost_fn(state.positions, proposals, preconditioner=preconditioner)  # (N, N*M)
 
     # --- 4. Median normalize ---
     C, cost_median = median_normalize(C)
@@ -127,6 +137,16 @@ def step(
         log_gamma, dual_f, dual_g, sinkhorn_iters = sinkhorn_log_domain(
             C, log_a, log_b,
             eps=config.epsilon,
+            max_iter=config.sinkhorn_max_iter,
+            tol=config.sinkhorn_tol,
+            dual_f_init=state.dual_f,
+            dual_g_init=state.dual_g,
+        )
+    elif config.coupling == "unbalanced":
+        log_gamma, dual_f, dual_g, sinkhorn_iters = sinkhorn_unbalanced(
+            C, log_a, log_b,
+            eps=config.epsilon,
+            rho=config.rho,
             max_iter=config.sinkhorn_max_iter,
             tol=config.sinkhorn_tol,
             dual_f_init=state.dual_f,
@@ -167,9 +187,15 @@ def step(
         step=state.step + 1,
     )
 
+    # --- Coupling ESS: effective proposals per particle ---
+    log_gamma_row = log_gamma - logsumexp(log_gamma, axis=1, keepdims=True)
+    ess_per_row = 1.0 / jnp.sum(jnp.exp(2.0 * log_gamma_row), axis=1)  # (N,)
+    coupling_ess = jnp.mean(ess_per_row)
+
     info = {
         "sinkhorn_iters": sinkhorn_iters,
         "cost_median": cost_median,
+        "coupling_ess": coupling_ess,
     }
 
     return new_state, info

@@ -1,0 +1,59 @@
+experiment:
+  name: "gmm-10d-5-cost-variants"
+  seeds: [0, 1, 2, 3, 4]
+
+  target:
+    type: "gmm"
+    params:
+      dim: 10
+      n_modes: 5
+      arrangement: "ring"
+      separation: 6.0
+      component_std: 1.0
+
+  shared:
+    n_particles: 200
+    n_iterations: 500
+    init:
+      type: "gaussian"
+      scale: 5.0
+
+  checkpoints: [0, 10, 25, 50, 100, 200, 500]
+
+  metrics:
+    - "energy_distance"
+    - "mode_coverage"
+    - "mean_error"
+    - "coupling_ess"
+
+  algorithms:
+    - label: "ETD-B-Euc"
+      cost: "euclidean"
+      coupling: "balanced"
+      n_proposals: 50
+      epsilon: 0.1
+      alpha: 0.05
+
+    - label: "ETD-B-Maha"
+      cost: "mahalanobis"
+      coupling: "balanced"
+      precondition: true
+      n_proposals: 50
+      epsilon: 0.1
+      alpha: 0.05
+
+    - label: "ETD-B-Linf"
+      cost: "linf"
+      coupling: "balanced"
+      n_proposals: 50
+      epsilon: 0.1
+      alpha: 0.05
+
+    - label: "ETD-B-DV"
+      cost: "euclidean"
+      coupling: "balanced"
+      dv_feedback: true
+      dv_weight: 1.0
+      n_proposals: 50
+      epsilon: 0.1
+      alpha: 0.05

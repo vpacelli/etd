@@ -6,6 +6,8 @@ import jax.numpy as jnp
 def squared_euclidean_cost(
     positions: jnp.ndarray,   # (N, d)
     proposals: jnp.ndarray,   # (P, d)
+    *,
+    preconditioner: jnp.ndarray = None,  # unused, kept for uniform interface
 ) -> jnp.ndarray:             # (N, P)
     """Compute C_ij = ‖x_i - y_j‖² / 2.
 
@@ -17,6 +19,8 @@ def squared_euclidean_cost(
     Args:
         positions: Particle positions, shape ``(N, d)``.
         proposals: Proposal positions, shape ``(P, d)``.
+        preconditioner: Unused.  Accepted for interface uniformity with
+            other cost functions.
 
     Returns:
         Cost matrix, shape ``(N, P)``.  Non-negative.

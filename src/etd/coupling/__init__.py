@@ -2,10 +2,12 @@
 
 from etd.coupling.gibbs import gibbs_coupling
 from etd.coupling.sinkhorn import sinkhorn_log_domain
+from etd.coupling.unbalanced import sinkhorn_unbalanced
 
 COUPLINGS = {
     "gibbs": gibbs_coupling,
     "balanced": sinkhorn_log_domain,
+    "unbalanced": sinkhorn_unbalanced,
 }
 
 
@@ -25,4 +27,5 @@ __all__ = [
     "get_coupling_fn",
     "gibbs_coupling",
     "sinkhorn_log_domain",
+    "sinkhorn_unbalanced",
 ]
