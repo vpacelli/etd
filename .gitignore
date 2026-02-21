@@ -207,9 +207,15 @@ marimo/_lsp/
 __marimo__/
 
 
+# Project-specific
+results/
+data/
+datasets/
+.cache/
+
 # Binary files
-.png
-.pdf
-.jpg
-.jpeg
-.npz
+*.png
+*.pdf
+*.jpg
+*.jpeg
+*.npz
