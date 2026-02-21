@@ -299,12 +299,14 @@ def main():
 
     from etd.targets import get_target
 
-    # Build target params
-    target_params: Dict[str, Any] = {"dim": args.dim}
-    if args.dataset:
-        target_params["dataset"] = args.dataset
+    # Build target params — logistic gets dim from the dataset, not CLI
+    target_params: Dict[str, Any] = {}
     if args.target == "logistic":
+        if args.dataset:
+            target_params["dataset"] = args.dataset
         target_params["prior_std"] = args.prior_std
+    else:
+        target_params["dim"] = args.dim
 
     target = get_target(args.target, **target_params)
 
