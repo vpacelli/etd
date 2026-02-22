@@ -135,16 +135,21 @@ def _make_jit_scan(
             n_steps: Number of steps to run (static).
 
         Returns:
-            Final state after n_steps.
+            Tuple ``(final_state, last_info)`` where ``last_info`` is the
+            info dict from the final step (for checkpoint diagnostics).
         """
         def scan_body(carry, t_offset):
             t = start_iter + t_offset
             key_step = jax.random.fold_in(key_base, t)
-            new_state, _info = step_fn(key_step, carry, target, config)
-            return new_state, None
+            new_state, info = step_fn(key_step, carry, target, config)
+            return new_state, info
 
-        final_state, _ = jax.lax.scan(scan_body, state, jnp.arange(n_steps))
-        return final_state
+        final_state, stacked_info = jax.lax.scan(
+            scan_body, state, jnp.arange(n_steps),
+        )
+        # Extract last step's info from the stacked outputs
+        last_info = jax.tree.map(lambda x: x[-1], stacked_info)
+        return final_state, last_info
 
     return run_segment
 
@@ -588,9 +593,9 @@ def run_single(
         # This excludes JIT compilation time from the wall-clock measurement.
         warmup_state = init_fn(k_init, target, config, init_positions=init_positions_np)
         if segments:
-            _ = scan_runner(warmup_state, k_run, 1, 1)
+            _, _wi = scan_runner(warmup_state, k_run, 1, 1)
             jax.block_until_ready(_)
-            del warmup_state, _
+            del warmup_state, _, _wi
 
         # Re-init state (warm-up consumed the buffer via donation)
         state = init_fn(k_init, target, config, init_positions=init_positions_np)
@@ -605,14 +610,18 @@ def run_single(
         t_start = time.perf_counter()
 
         for start, n_steps, ckpt in segments:
-            state = scan_runner(state, k_run, start, n_steps)
+            state, info = scan_runner(state, k_run, start, n_steps)
             jax.block_until_ready(state)
 
             positions_np = np.array(state.positions)
             particles_dict[ckpt] = positions_np
-            metrics_dict[ckpt] = compute_metrics(
+            step_metrics = compute_metrics(
                 state.positions, target, metrics_list, ref_data,
             )
+            for diag_name in ("coupling_ess", "sinkhorn_iters"):
+                if diag_name in metrics_list and diag_name in info:
+                    step_metrics[diag_name] = float(info[diag_name])
+            metrics_dict[ckpt] = step_metrics
 
         wall_clock = time.perf_counter() - t_start
 
