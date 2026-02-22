@@ -46,7 +46,7 @@ experiment:
       precondition: true
       n_proposals: 25
       sinkhorn_tol: 1e-5
-      epsilon: [0.1, 0.5, 1.0]
+      epsilon: 0.5
       alpha: 0.1
 
     # - label: "ETD-B-Linf"
