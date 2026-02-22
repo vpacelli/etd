@@ -32,6 +32,11 @@ from etd.diagnostics.metrics import (
 )
 from etd.targets import get_target
 
+try:
+    from experiments.nuts import load_reference
+except ImportError:
+    load_reference = None
+
 console = Console()
 
 # Same dispatch table as run.py — add new metrics here.
@@ -82,6 +87,83 @@ def reconstruct_target(cfg: dict):
     """
     target_cfg = cfg["experiment"]["target"]
     return get_target(target_cfg["type"], **target_cfg.get("params", {}))
+
+
+# ---------------------------------------------------------------------------
+# Reference data lookup chain
+# ---------------------------------------------------------------------------
+
+def _load_reference(
+    args,
+    cfg: dict,
+    target,
+    results_dir: str,
+) -> Optional[jnp.ndarray]:
+    """Load reference samples using a prioritized lookup chain.
+
+    Tries, in order:
+      1. ``--reference`` CLI path (explicit override)
+      2. ``reference.npz`` bundled in the results directory
+      3. NUTS cache via ``load_reference()``
+      4. ``target.sample()`` (synthetic targets)
+      5. None — prints which metrics will be unavailable
+
+    Args:
+        args: Parsed CLI arguments (with ``.reference`` and ``.n_ref``).
+        cfg: Experiment config dict.
+        target: Reconstructed target distribution.
+        results_dir: Path to the results directory.
+
+    Returns:
+        Reference samples ``(M, d)`` or None.
+    """
+    # 1. Explicit --reference flag
+    if args.reference is not None:
+        ref_path = args.reference
+        if not os.path.exists(ref_path):
+            console.print(f"[red]Error: --reference path not found: {ref_path}[/]")
+            return None
+        data = np.load(ref_path)
+        ref = jnp.asarray(data["samples"])
+        console.print(f"Reference: loaded from --reference ({ref_path})")
+        return ref
+
+    # 2. Bundled reference.npz in results directory
+    bundled_path = os.path.join(results_dir, "reference.npz")
+    if os.path.exists(bundled_path):
+        data = np.load(bundled_path)
+        ref = jnp.asarray(data["samples"])
+        console.print(f"Reference: loaded from bundled reference.npz")
+        return ref
+
+    # 3. NUTS cache
+    if load_reference is not None:
+        try:
+            target_cfg = cfg.get("experiment", {}).get("target", {})
+            target_name = target_cfg.get("type", "")
+            target_params = target_cfg.get("params", {})
+            ref = load_reference(target_name, target_params)
+            if ref is not None:
+                console.print(f"Reference: loaded from NUTS cache")
+                return jnp.asarray(ref)
+        except Exception:
+            pass
+
+    # 4. Synthetic sampling
+    if hasattr(target, "sample"):
+        ref = target.sample(jax.random.PRNGKey(99999), args.n_ref)
+        console.print(f"Reference: sampled from target ({args.n_ref} samples)")
+        return ref
+
+    # 5. None — explain what's missing
+    console.print(
+        "[yellow]No reference data available. "
+        "Metrics requiring reference samples (energy_distance, "
+        "sliced_wasserstein, mean_rmse, variance_ratio_ref) will show N/A.\n"
+        "  Hint: re-run the experiment to bundle reference.npz, "
+        "or use --reference <path>.[/]"
+    )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +308,10 @@ def main():
         "--n-ref", type=int, default=5000,
         help="Number of reference samples (default: 5000)",
     )
+    parser.add_argument(
+        "--reference", default=None,
+        help="Path to reference samples .npz (key: 'samples')",
+    )
     args = parser.parse_args()
 
     # --- Load ---
@@ -242,10 +328,8 @@ def main():
     metrics_list = args.metrics or list(METRIC_DISPATCH.keys())
     console.print(f"Metrics: {', '.join(metrics_list)}")
 
-    # --- Reference data (same fixed seed as run.py) ---
-    ref_data = None
-    if hasattr(target, "sample"):
-        ref_data = target.sample(jax.random.PRNGKey(99999), args.n_ref)
+    # --- Reference data (prioritized lookup chain) ---
+    ref_data = _load_reference(args, cfg, target, args.results_dir)
 
     # --- Recompute ---
     results = recompute_metrics(

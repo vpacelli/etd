@@ -667,6 +667,7 @@ def save_results(
     cfg: dict,
     all_metrics: dict,
     all_particles: dict,
+    ref_data=None,
 ) -> str:
     """Save experiment results to disk.
 
@@ -675,6 +676,7 @@ def save_results(
         cfg: Original config dict (written as config.yaml).
         all_metrics: ``{seed → {algo → {ckpt → {metric → val}}}}``.
         all_particles: ``{seed → {algo → {ckpt → (N,d) ndarray}}}``.
+        ref_data: Reference samples ``(M, d)`` to bundle for portability.
 
     Returns:
         Output directory path.
@@ -707,6 +709,13 @@ def save_results(
                 particles_flat[flat_key] = arr
 
     np.savez(os.path.join(out_dir, "particles.npz"), **particles_flat)
+
+    # Bundle reference samples for portable results
+    if ref_data is not None:
+        np.savez(
+            os.path.join(out_dir, "reference.npz"),
+            samples=np.asarray(ref_data),
+        )
 
     return out_dir
 
@@ -888,7 +897,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     # --- Save ---
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     out_dir = os.path.join("results", name, timestamp)
-    save_results(out_dir, cfg, all_metrics, all_particles)
+    save_results(out_dir, cfg, all_metrics, all_particles, ref_data=ref_data)
     console.print(f"\n✓ Results saved to {out_dir}/")
 
     return all_metrics
