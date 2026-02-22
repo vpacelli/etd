@@ -19,6 +19,8 @@ from etd.types import PreconditionerConfig
 from etd.costs.euclidean import squared_euclidean_cost
 from etd.costs.imq import imq_cost
 from etd.costs.linf import linf_cost
+from etd.step import init as etd_init, step as etd_step
+from etd.types import ETDConfig, PreconditionerConfig
 from etd.weights import _log_proposal_density, importance_weights
 
 
@@ -190,6 +192,21 @@ class _IsotropicGaussian:
 
     def score(self, x):
         return -(x - self._mean)
+
+
+class _AnisotropicGaussian:
+    """Diagonal Gaussian with different variances per dimension."""
+
+    def __init__(self, dim, scales):
+        self.dim = dim
+        self._scales = scales   # (d,) — standard deviations per dim
+        self._vars = scales ** 2
+
+    def log_prob(self, x):
+        return -0.5 * jnp.sum(x ** 2 / self._vars, axis=-1)
+
+    def score(self, x):
+        return -x / self._vars
 
 
 # ---------------------------------------------------------------------------
@@ -416,3 +433,124 @@ class TestCholeskyCostWhitening:
         for cost_fn in [squared_euclidean_cost, imq_cost, linf_cost]:
             C = cost_fn(positions, proposals, cholesky_factor=L)
             assert jnp.all(C >= 0), f"{cost_fn.__name__} produced negative cost"
+
+
+# ---------------------------------------------------------------------------
+# Step function integration
+# ---------------------------------------------------------------------------
+
+class TestCholeskyStepIntegration:
+    """Tests for ETD step() with Cholesky preconditioner."""
+
+    def _run_steps(self, config, target, n_steps=5):
+        """Helper: run n_steps of ETD and return final state."""
+        key = jax.random.key(100)
+        state = etd_init(key, target, config)
+        for i in range(n_steps):
+            k = jax.random.fold_in(key, i)
+            state, info = etd_step(k, state, target, config)
+        return state, info
+
+    def test_cholesky_step_runs(self):
+        """ETD step with Cholesky preconditioner should run without error."""
+        target = _IsotropicGaussian(dim=2)
+        config = ETDConfig(
+            n_particles=20, n_iterations=5, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=True,
+                shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+        state, info = self._run_steps(config, target, n_steps=5)
+        assert state.positions.shape == (20, 2)
+        assert jnp.all(jnp.isfinite(state.positions))
+
+    def test_cholesky_factor_updates(self):
+        """Cholesky factor should change from eye(d) after the first step."""
+        target = _IsotropicGaussian(dim=3)
+        config = ETDConfig(
+            n_particles=30, n_iterations=5, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+        key = jax.random.key(101)
+        state = etd_init(key, target, config)
+        # Initial cholesky_factor is eye(d)
+        npt.assert_allclose(state.cholesky_factor, jnp.eye(3), atol=1e-6)
+
+        state, _ = etd_step(key, state, target, config)
+        # After one step, should differ from eye(d)
+        diff = jnp.max(jnp.abs(state.cholesky_factor - jnp.eye(3)))
+        assert diff > 1e-4, "Cholesky factor should have changed"
+
+    def test_cholesky_higher_dim(self):
+        """Cholesky should work for d=10."""
+        target = _IsotropicGaussian(dim=10)
+        config = ETDConfig(
+            n_particles=50, n_iterations=3, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=True,
+                shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+        state, _ = self._run_steps(config, target, n_steps=3)
+        assert state.cholesky_factor.shape == (10, 10)
+        assert jnp.all(jnp.isfinite(state.cholesky_factor))
+
+    def test_source_positions_vs_scores(self):
+        """source='positions' and 'scores' should give different L.
+
+        For an anisotropic Gaussian, Cov(x) != Cov(score(x)) because
+        score = -Σ⁻¹ x, so Cov(score) = Σ⁻¹ Cov(x) Σ⁻¹ = Σ⁻¹.
+        """
+        # Use an anisotropic target so Cov(scores) != Cov(positions)
+        target = _AnisotropicGaussian(dim=2, scales=jnp.array([0.1, 10.0]))
+        config_scores = ETDConfig(
+            n_particles=50, n_iterations=5, n_proposals=5,
+            use_score=True, alpha=0.01, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                source="scores", shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+        config_positions = ETDConfig(
+            n_particles=50, n_iterations=5, n_proposals=5,
+            use_score=True, alpha=0.01, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                source="positions", shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+        state_s, _ = self._run_steps(config_scores, target, n_steps=5)
+        state_p, _ = self._run_steps(config_positions, target, n_steps=5)
+        # Different data sources → different L
+        diff = jnp.max(jnp.abs(state_s.cholesky_factor - state_p.cholesky_factor))
+        assert diff > 1e-3
+
+    def test_legacy_rmsprop_still_works(self):
+        """Legacy flat fields should still work when preconditioner is default."""
+        target = _IsotropicGaussian(dim=2)
+        config = ETDConfig(
+            n_particles=20, n_iterations=3, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            precondition=True, whiten=True,
+        )
+        state, _ = self._run_steps(config, target, n_steps=3)
+        assert jnp.all(jnp.isfinite(state.positions))
+        # precond_accum should have been updated (not all ones)
+        assert not jnp.allclose(state.precond_accum, jnp.ones(2))
+
+    def test_no_precond_cholesky_unchanged(self):
+        """With type='none', cholesky_factor stays at eye(d)."""
+        target = _IsotropicGaussian(dim=2)
+        config = ETDConfig(
+            n_particles=20, n_iterations=3, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+        )
+        state, _ = self._run_steps(config, target, n_steps=3)
+        npt.assert_allclose(state.cholesky_factor, jnp.eye(2), atol=1e-10)
