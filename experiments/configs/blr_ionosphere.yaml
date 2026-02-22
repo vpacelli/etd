@@ -9,7 +9,7 @@ experiment:
       prior_std: 5.0
 
   shared:
-    n_particles: 200
+    n_particles: 100
     n_iterations: 1000
     init:
       type: "gaussian"
@@ -58,10 +58,10 @@ experiment:
     - label: "ETD-B-IMQ"
       cost:
         type: "imq"
-        c: [0.1, 0.5, 1.0, 5.0]
+        c: 1.0
       coupling: "balanced"
       epsilon: 0.1
-      alpha: 0.5
+      alpha: 0.01
       n_proposals: 25
 
     - label: "SVGD"

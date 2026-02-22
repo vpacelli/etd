@@ -9,7 +9,7 @@ experiment:
       prior_std: 5.0
 
   shared:
-    n_particles: 200
+    n_particles: 100
     n_iterations: 1000
     init:
       type: "gaussian"
