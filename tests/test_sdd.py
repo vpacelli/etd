@@ -57,6 +57,9 @@ class TestInit:
     def test_dual_g_self_shape(self, state, config):
         assert state.dual_g_self.shape == (config.n_particles,)
 
+    def test_dv_potential_shape(self, state, config):
+        assert state.dv_potential.shape == (config.n_particles,)
+
     def test_precond_accum_shape(self, state):
         assert state.precond_accum.shape == (2,)
 

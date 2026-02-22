@@ -104,6 +104,35 @@ class TestCorrectness:
 
 
 # ---------------------------------------------------------------------------
+# Aux dict tests
+# ---------------------------------------------------------------------------
+
+class TestAuxDict:
+    def test_aux_weights_shape(self):
+        """aux['weights'] should have shape (N, P)."""
+        N, P, d = 10, 20, 3
+        key = jax.random.PRNGKey(0)
+        log_gamma = jax.random.normal(key, (N, P))
+        proposals = jax.random.normal(jax.random.PRNGKey(1), (P, d))
+        positions = jnp.zeros((N, d))
+
+        _, aux = barycentric_update(key, log_gamma, proposals, positions=positions)
+        assert aux["weights"].shape == (N, P)
+
+    def test_aux_weights_sum_to_one(self):
+        """Each row of aux['weights'] should sum to 1.0."""
+        N, P, d = 10, 20, 3
+        key = jax.random.PRNGKey(42)
+        log_gamma = jax.random.normal(key, (N, P))
+        proposals = jax.random.normal(jax.random.PRNGKey(1), (P, d))
+        positions = jnp.zeros((N, d))
+
+        _, aux = barycentric_update(key, log_gamma, proposals, positions=positions)
+        row_sums = jnp.sum(aux["weights"], axis=1)  # (N,)
+        np.testing.assert_allclose(row_sums, 1.0, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 

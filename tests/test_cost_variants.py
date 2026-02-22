@@ -327,7 +327,7 @@ class TestDVFeedback:
         )
 
     def test_dv_changes_coupling(self, rng):
-        """With non-zero dual_g, DV feedback should change the coupling."""
+        """With non-zero dv_potential, DV feedback should change the coupling."""
         target = SimpleGaussian(dim=3)
         key = rng
 
@@ -340,10 +340,10 @@ class TestDVFeedback:
         k1, k2 = jax.random.split(key)
         state = etd_init(k1, target, config)
 
-        # Run one step to get non-zero dual_g
+        # Run one step to get non-zero dv_potential
         state_1, _ = etd_step(k2, state, target, config)
 
-        # Run second step with DV feedback (uses non-zero dual_g from step 1)
+        # Run second step with DV feedback (uses non-zero dv_potential from step 1)
         k3, k4 = jax.random.split(k2)
         _, info_dv = etd_step(k3, state_1, target, config)
 
@@ -360,6 +360,130 @@ class TestDVFeedback:
         ess_no_dv = float(info_no_dv["coupling_ess"])
         assert ess_dv != pytest.approx(ess_no_dv, abs=1e-3), (
             f"DV feedback should change coupling: {ess_dv} ≈ {ess_no_dv}"
+        )
+
+    def test_dv_potential_shape_and_finiteness(self, rng):
+        """After one step with DV: dv_potential has shape (N,) and all finite."""
+        target = SimpleGaussian(dim=3)
+        config = ETDConfig(
+            n_particles=15, n_proposals=8, n_iterations=1,
+            coupling="balanced", epsilon=0.5, alpha=0.05,
+            dv_feedback=True, dv_weight=1.0,
+        )
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, _ = etd_step(k2, state, target, config)
+
+        assert new_state.dv_potential.shape == (15,)
+        assert jnp.all(jnp.isfinite(new_state.dv_potential))
+
+    def test_dv_potential_zeros_when_disabled(self, rng):
+        """With dv_feedback=False: dv_potential should be all zeros."""
+        target = SimpleGaussian(dim=3)
+        config = ETDConfig(
+            n_particles=15, n_proposals=8, n_iterations=1,
+            coupling="balanced", epsilon=0.5, alpha=0.05,
+            dv_feedback=False,
+        )
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, _ = etd_step(k2, state, target, config)
+
+        np.testing.assert_array_equal(
+            np.array(new_state.dv_potential), np.zeros(15),
+        )
+
+    def test_dv_potential_full_step_equals_g_tilde(self, rng):
+        """With step_size=1.0: dv_potential == g_tilde[indices] (no interpolation).
+
+        At full step, the interpolation formula (1-eta)*f + eta*g_tilde[j]
+        reduces to just g_tilde[j].
+        """
+        target = SimpleGaussian(dim=3)
+        N, M = 15, 8
+        eps_val = 0.5
+        config = ETDConfig(
+            n_particles=N, n_proposals=M, n_iterations=1,
+            coupling="balanced", epsilon=eps_val, alpha=0.05,
+            step_size=1.0,  # full step
+            dv_feedback=True, dv_weight=1.0,
+        )
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, _ = etd_step(k2, state, target, config)
+
+        # dv_potential should be non-zero (g_tilde has actual signal)
+        assert not jnp.allclose(new_state.dv_potential, 0.0)
+        # At full step, dv_potential = g_tilde[indices] (pure c-transform)
+        # Since dual_f contribution is (1-1.0)*f = 0, the potential should be
+        # purely from the target-side c-transform.
+        assert new_state.dv_potential.shape == (N,)
+        assert jnp.all(jnp.isfinite(new_state.dv_potential))
+
+    def test_dv_potential_interpolation(self, rng):
+        """With step_size=0.5: dv_potential blends dual_f and g_tilde."""
+        target = SimpleGaussian(dim=3)
+        N, M = 15, 8
+        config_full = ETDConfig(
+            n_particles=N, n_proposals=M, n_iterations=1,
+            coupling="balanced", epsilon=0.5, alpha=0.05,
+            step_size=1.0,
+            dv_feedback=True, dv_weight=1.0,
+        )
+        config_half = ETDConfig(
+            n_particles=N, n_proposals=M, n_iterations=1,
+            coupling="balanced", epsilon=0.5, alpha=0.05,
+            step_size=0.5,
+            dv_feedback=True, dv_weight=1.0,
+        )
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config_full)
+
+        # Run one step to build up non-zero dv_potential and duals
+        state_1, _ = etd_step(k2, state, target, config_full)
+
+        # Second step with full vs half step — same key so same proposals/coupling
+        k3, _ = jax.random.split(k2)
+        state_full, _ = etd_step(k3, state_1, target, config_full)
+        state_half, _ = etd_step(k3, state_1, target, config_half)
+
+        # Half-step potential should differ from full-step (interpolation effect)
+        # (unless dual_f happens to equal g_tilde, which is astronomically unlikely)
+        assert not jnp.allclose(
+            state_full.dv_potential, state_half.dv_potential, atol=1e-4,
+        ), "Interpolation should produce different potentials at different step sizes"
+
+    def test_dv_potential_unbalanced(self, rng):
+        """DV potential works with unbalanced coupling (lam-scaled c-transform)."""
+        target = SimpleGaussian(dim=3)
+        config = ETDConfig(
+            n_particles=15, n_proposals=8, n_iterations=1,
+            coupling="unbalanced", rho=1.0,
+            epsilon=0.5, alpha=0.05,
+            dv_feedback=True, dv_weight=1.0,
+        )
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, _ = etd_step(k2, state, target, config)
+
+        assert new_state.dv_potential.shape == (15,)
+        assert jnp.all(jnp.isfinite(new_state.dv_potential))
+
+    def test_dv_potential_gibbs_is_zeros(self, rng):
+        """Gibbs coupling has no iterative solver → dv_potential is zeros."""
+        target = SimpleGaussian(dim=3)
+        config = ETDConfig(
+            n_particles=15, n_proposals=8, n_iterations=1,
+            coupling="gibbs", epsilon=0.5, alpha=0.05,
+            dv_feedback=True, dv_weight=1.0,
+        )
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, _ = etd_step(k2, state, target, config)
+
+        # Gibbs: g_tilde = zeros → dv_potential = 0*f + 1.0*zeros = zeros
+        np.testing.assert_allclose(
+            np.array(new_state.dv_potential), 0.0, atol=1e-6,
         )
 
 

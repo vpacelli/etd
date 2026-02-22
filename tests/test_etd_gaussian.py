@@ -108,6 +108,7 @@ class TestInit:
         assert state.positions.shape == (N, d)
         assert state.dual_f.shape == (N,)
         assert state.dual_g.shape == (N * M,)
+        assert state.dv_potential.shape == (N,)
         assert state.precond_accum.shape == (d,)
         assert int(state.step) == 0
 
@@ -150,12 +151,14 @@ class TestStep:
         assert new_state.positions.shape == (N, d)
         assert new_state.dual_f.shape == (N,)
         assert new_state.dual_g.shape == (N * M,)
+        assert new_state.dv_potential.shape == (N,)
         assert new_state.precond_accum.shape == (d,)
         assert int(new_state.step) == 1
 
         assert jnp.all(jnp.isfinite(new_state.positions))
         assert jnp.all(jnp.isfinite(new_state.dual_f))
         assert jnp.all(jnp.isfinite(new_state.dual_g))
+        assert jnp.all(jnp.isfinite(new_state.dv_potential))
 
         assert "sinkhorn_iters" in info
         assert "cost_scale" in info

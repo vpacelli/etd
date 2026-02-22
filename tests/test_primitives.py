@@ -251,6 +251,33 @@ class TestSystematicResample:
 
 
 # ---------------------------------------------------------------------------
+# Aux dict tests (systematic_resample)
+# ---------------------------------------------------------------------------
+
+class TestResampleAux:
+    def test_aux_indices_shape(self):
+        """aux['indices'] should have shape (N,)."""
+        N, P = 10, 20
+        key = jax.random.PRNGKey(0)
+        log_gamma = jnp.zeros((N, P))
+        proposals = jax.random.normal(key, (P, 3))
+
+        _, aux = systematic_resample(key, log_gamma, proposals)
+        assert aux["indices"].shape == (N,)
+
+    def test_aux_indices_in_range(self):
+        """All indices should be in [0, P)."""
+        N, P = 10, 20
+        key = jax.random.PRNGKey(42)
+        log_gamma = jax.random.normal(key, (N, P))
+        proposals = jax.random.normal(jax.random.PRNGKey(1), (P, 3))
+
+        _, aux = systematic_resample(key, log_gamma, proposals)
+        assert jnp.all(aux["indices"] >= 0)
+        assert jnp.all(aux["indices"] < P)
+
+
+# ---------------------------------------------------------------------------
 # Additional tests
 # ---------------------------------------------------------------------------
 
