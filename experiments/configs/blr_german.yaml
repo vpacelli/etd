@@ -61,7 +61,7 @@ experiment:
         c: 1.0
       coupling: "balanced"
       epsilon: 0.1
-      alpha: [0.01, 0.05, 0.1, 0.5, 1.0]
+      alpha: 0.01
       n_proposals: 25
 
     - label: "SVGD"
