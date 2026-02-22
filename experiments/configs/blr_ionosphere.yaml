@@ -39,6 +39,7 @@ experiment:
     - label: "ETD-B-Maha"
       cost: "mahalanobis"
       coupling: "balanced"
+      precondition: true
       use_score: true
       n_proposals: 25
       sinkhorn_tol: 1e-3
