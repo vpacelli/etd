@@ -170,10 +170,57 @@ def download_and_store_ionosphere(con: duckdb.DuckDBPyConnection) -> int:
     return n
 
 
+def download_and_store_sonar(con: duckdb.DuckDBPyConnection) -> int:
+    """Fetch UCI Sonar from OpenML, standardize, store.
+
+    The Sonar dataset has 208 instances and 60 continuous features (sonar
+    frequency-band energies, originally in [0, 1]).  Binary target: Mine=1,
+    Rock=0.
+
+    Returns:
+        Number of rows stored.
+    """
+    from sklearn.datasets import fetch_openml
+
+    data = fetch_openml("sonar", version=1, as_frame=True, parser="auto")
+    df = data.frame
+
+    # Identify target column (may be "Class" depending on version)
+    target_col = [c for c in df.columns if c.lower() == "class"][0]
+    y = (df[target_col] == "Mine").astype(int).values  # 1=Mine, 0=Rock
+
+    X_df = df.drop(columns=[target_col])
+
+    # All features are numeric — convert to float array
+    X_arr = X_df.values.astype(float)
+
+    # Standardize
+    mu = X_arr.mean(axis=0)
+    std = X_arr.std(axis=0)
+    std = np.where(std < 1e-10, 1.0, std)  # guard constant columns
+    X_arr = (X_arr - mu) / std
+
+    n, d = X_arr.shape
+
+    # Store in DuckDB
+    con.execute("DROP TABLE IF EXISTS sonar")
+    con.execute(
+        f"CREATE TABLE sonar (y INTEGER, {', '.join(f'x{i} DOUBLE' for i in range(d))})"
+    )
+
+    for i in range(n):
+        vals = [int(y[i])] + X_arr[i].tolist()
+        placeholders = ", ".join(["?"] * (d + 1))
+        con.execute(f"INSERT INTO sonar VALUES ({placeholders})", vals)
+
+    return n
+
+
 _DOWNLOADERS = {
     "german_credit": download_and_store_german_credit,
     "australian": download_and_store_australian,
     "ionosphere": download_and_store_ionosphere,
+    "sonar": download_and_store_sonar,
 }
 
 

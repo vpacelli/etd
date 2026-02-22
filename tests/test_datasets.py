@@ -111,6 +111,35 @@ class TestIonosphere:
 # Table listing and missing table
 # ---------------------------------------------------------------------------
 
+class TestSonar:
+    @pytest.mark.slow
+    def test_download_store_load(self, temp_db):
+        """Full roundtrip: download → store → load."""
+        from experiments.datasets import (
+            download_and_store_sonar,
+            get_connection,
+            load_dataset,
+        )
+
+        con = get_connection()
+        n = download_and_store_sonar(con)
+        con.close()
+
+        assert n == 208  # Sonar has 208 samples
+
+        X, y = load_dataset("sonar")
+        assert X.shape == (208, 60)  # 60 frequency-band features
+        assert y.shape == (208,)
+        assert X.dtype == np.float64
+        assert y.dtype == np.int32
+
+        # Standardized: mean ~0
+        np.testing.assert_allclose(X.mean(axis=0), 0.0, atol=0.1)
+
+        # Labels are binary
+        assert set(np.unique(y)).issubset({0, 1})
+
+
 class TestHelpers:
     def test_list_tables_empty(self, temp_db):
         from experiments.datasets import get_connection, list_tables
