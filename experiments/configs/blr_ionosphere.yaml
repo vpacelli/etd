@@ -52,11 +52,11 @@ experiment:
       cost: "linf"
       coupling: "balanced"
       use_score: true
-      precondition: [true, false]
+      precondition: false
+      whiten: false
       n_proposals: 25
       sinkhorn_tol: 1e-3
-      whiten: [true, false]
-      epsilon: 0.1
+      epsilon: [0.1, 0.5, 1.0]
       alpha: 0.1
       step_size: 0.5
 
