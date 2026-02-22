@@ -197,6 +197,10 @@ class ETDState(NamedTuple):
         dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
             Clean c-transformed potential (without ``log_b`` contamination)
             interpolated between source and target potentials.
+        log_prob: Cached log π(x) from mutation, shape ``(N,)``.
+            Zeros when mutation is off.
+        scores: Cached clipped scores from mutation, shape ``(N, d)``.
+            Zeros when mutation is off or using RWM.
         precond_accum: RMSProp-style accumulator for diagonal
             preconditioner, shape ``(d,)``.  Initialized to **ones**
             (it appears as a denominator via ``1 / sqrt(G + δ)``).
@@ -210,6 +214,8 @@ class ETDState(NamedTuple):
     dual_f: jnp.ndarray         # (N,)
     dual_g: jnp.ndarray         # (N*M,)
     dv_potential: jnp.ndarray   # (N,)
+    log_prob: jnp.ndarray       # (N,)
+    scores: jnp.ndarray         # (N, d)
     precond_accum: jnp.ndarray  # (d,)
     cholesky_factor: jnp.ndarray  # (d, d)
     step: int                   # scalar

@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 
 from etd.primitives.mutation import mala_kernel, mutate, rwm_kernel
-from etd.types import MutationConfig
+from etd.step import init as etd_init, step as etd_step
+from etd.types import ETDConfig, MutationConfig
 from etd.targets.gaussian import GaussianTarget
 
 
@@ -296,3 +297,70 @@ class TestCholeskyBenefit:
             f"Cholesky acceptance ({ar_chol:.3f}) much worse than "
             f"identity ({ar_iso:.3f}) on anisotropic target"
         )
+
+
+# ---------------------------------------------------------------------------
+# ETD step integration
+# ---------------------------------------------------------------------------
+
+class TestETDMutation:
+    """ETD step with mutation enabled: shapes, info, and noop."""
+
+    def test_etd_with_mala_mutation(self):
+        target = GaussianTarget(dim=2)
+        key = jax.random.PRNGKey(0)
+        mut = MutationConfig(kernel="mala", n_steps=3, step_size=0.01)
+        cfg = ETDConfig(
+            n_particles=30, n_iterations=10, n_proposals=10,
+            mutation=mut,
+        )
+        k_init, k_run = jax.random.split(key)
+        state = etd_init(k_init, target, cfg)
+
+        for i in range(10):
+            k_run, k_step = jax.random.split(k_run)
+            state, info = etd_step(k_step, state, target, cfg)
+
+        assert state.positions.shape == (30, 2)
+        assert state.log_prob.shape == (30,)
+        assert state.scores.shape == (30, 2)
+        assert jnp.all(jnp.isfinite(state.positions))
+        assert "mutation_acceptance_rate" in info
+        ar = float(info["mutation_acceptance_rate"])
+        assert 0.0 <= ar <= 1.0
+
+    def test_etd_with_rwm_mutation(self):
+        target = GaussianTarget(dim=2)
+        key = jax.random.PRNGKey(1)
+        mut = MutationConfig(kernel="rwm", n_steps=3, step_size=0.01)
+        cfg = ETDConfig(
+            n_particles=30, n_iterations=10, n_proposals=10,
+            mutation=mut,
+        )
+        k_init, k_run = jax.random.split(key)
+        state = etd_init(k_init, target, cfg)
+
+        for i in range(10):
+            k_run, k_step = jax.random.split(k_run)
+            state, info = etd_step(k_step, state, target, cfg)
+
+        assert state.positions.shape == (30, 2)
+        assert jnp.all(jnp.isfinite(state.positions))
+        assert "mutation_acceptance_rate" in info
+
+    def test_etd_mutation_off_noop(self):
+        """Default MutationConfig → log_prob/scores are zeros."""
+        target = GaussianTarget(dim=2)
+        key = jax.random.PRNGKey(2)
+        cfg = ETDConfig(
+            n_particles=30, n_iterations=10, n_proposals=10,
+        )
+        k_init, k_run = jax.random.split(key)
+        state = etd_init(k_init, target, cfg)
+        k_run, k_step = jax.random.split(k_run)
+        state, info = etd_step(k_step, state, target, cfg)
+
+        # When mutation is off, log_prob and scores should be zeros
+        np.testing.assert_array_equal(np.array(state.log_prob), 0.0)
+        np.testing.assert_array_equal(np.array(state.scores), 0.0)
+        assert "mutation_acceptance_rate" not in info

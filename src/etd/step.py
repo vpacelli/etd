@@ -18,6 +18,7 @@ from jax.scipy.special import logsumexp
 
 from etd.costs import build_cost_fn, normalize_cost
 from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalanced
+from etd.primitives.mutation import mutate
 from etd.proposals.langevin import (
     clip_scores,
     langevin_proposals,
@@ -28,7 +29,7 @@ from etd.proposals.preconditioner import (
     update_rmsprop_accum,
 )
 from etd.schedule import resolve_param
-from etd.types import ETDConfig, ETDState, Target
+from etd.types import ETDConfig, ETDState, PreconditionerConfig, Target
 from etd.update import get_update_fn
 from etd.weights import importance_weights
 
@@ -88,6 +89,14 @@ def init(
         cholesky_factor = compute_ensemble_cholesky(
             positions, jnp.eye(d), pc,
         )
+    elif config.needs_cholesky:
+        # Mutation needs Cholesky but preconditioner doesn't provide it
+        _auto_pc = PreconditionerConfig(
+            type="cholesky", shrinkage=0.1, jitter=1e-6,
+        )
+        cholesky_factor = compute_ensemble_cholesky(
+            positions, jnp.eye(d), _auto_pc,
+        )
     else:
         cholesky_factor = jnp.eye(d)
 
@@ -96,6 +105,8 @@ def init(
         dual_f=jnp.zeros(N),
         dual_g=jnp.zeros(N * M),
         dv_potential=jnp.zeros(N),
+        log_prob=jnp.zeros(N),
+        scores=jnp.zeros((N, d)),
         precond_accum=jnp.ones(d),
         cholesky_factor=cholesky_factor,
         step=0,
@@ -139,7 +150,7 @@ def step(
 
     N = config.n_particles
     pc = config.preconditioner   # shorthand
-    key_propose, key_update = jax.random.split(key)
+    key_propose, key_update, key_mutate = jax.random.split(key, 3)
 
     # --- Legacy preconditioner path (flat fields) ---
     # Kept for backward compatibility; new code should use config.preconditioner.
@@ -309,7 +320,35 @@ def step(
     else:
         dv_potential = jnp.zeros(N)
 
-    # --- 8. Preconditioner update ---
+    # --- 8. MCMC Mutation (post-transport local refinement) ---
+    mut = config.mutation
+    if mut.active:
+        # Resolve Cholesky for mutation
+        if mut.use_cholesky and not pc.is_cholesky:
+            _auto_pc = PreconditionerConfig(
+                type="cholesky", shrinkage=0.1, jitter=1e-6,
+            )
+            mut_cholesky = compute_ensemble_cholesky(
+                new_positions, state.cholesky_factor, _auto_pc,
+            )
+        elif mut.use_cholesky:
+            mut_cholesky = state.cholesky_factor
+        else:
+            mut_cholesky = None
+
+        mut_clip = mut.score_clip if mut.score_clip is not None else config.score_clip
+
+        new_positions, new_log_prob, new_scores, mut_info = mutate(
+            key_mutate, new_positions, target, mut,
+            cholesky_factor=mut_cholesky, score_clip=mut_clip,
+        )
+    else:
+        new_log_prob = jnp.zeros(N)
+        new_scores = jnp.zeros((N, target.dim))
+        mut_info = {}
+
+    # --- 9. Preconditioner update ---
+    # Use post-mutation positions so Cholesky reflects latest particle spread
     new_precond = state.precond_accum
     new_cholesky = state.cholesky_factor
 
@@ -318,11 +357,11 @@ def step(
         if pc.source == "scores":
             if pc.use_unclipped_scores and config.use_score:
                 # Compute raw (unclipped) scores for preconditioner
-                precond_data = target.score(state.positions)  # (N, d)
+                precond_data = target.score(new_positions)  # (N, d)
             else:
                 precond_data = scores  # clipped scores from proposal step
         else:  # source == "positions"
-            precond_data = state.positions
+            precond_data = new_positions
 
         new_cholesky = compute_ensemble_cholesky(
             precond_data, state.cholesky_factor, pc,
@@ -342,6 +381,8 @@ def step(
         dual_f=dual_f,
         dual_g=dual_g,
         dv_potential=dv_potential,
+        log_prob=new_log_prob,
+        scores=new_scores,
         precond_accum=new_precond,
         cholesky_factor=new_cholesky,
         step=state.step + 1,
@@ -357,5 +398,7 @@ def step(
         "cost_scale": cost_scale,
         "coupling_ess": coupling_ess,
     }
+    if mut.active:
+        info["mutation_acceptance_rate"] = mut_info["acceptance_rate"]
 
     return new_state, info

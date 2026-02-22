@@ -47,13 +47,13 @@ def balanced_config():
         alpha=0.05,
         n_particles=100,
         n_proposals=25,
-        n_iterations=200,
+        n_iterations=300,
     )
 
 
 @pytest.fixture
 def converged_state(gaussian_target, balanced_config):
-    """Run 200 iterations on Gaussian and return final state."""
+    """Run 300 iterations on Gaussian and return final state."""
     key = jax.random.PRNGKey(42)
     k_init, k_run = jax.random.split(key)
     state = init(k_init, gaussian_target, balanced_config)
