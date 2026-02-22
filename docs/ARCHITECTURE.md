@@ -35,6 +35,7 @@ etd/
 │   │   ├── euclidean.py            # c(x,y) = ||x-y||²/2
 │   │   ├── mahalanobis.py          # c(x,y) = (x-y)ᵀ Σ⁻¹ (x-y) / 2
 │   │   ├── linf.py                 # c(x,y) = ||x-y||_∞
+│   │   ├── imq.py                  # c(x,y) = (c² + ||x-y||²)^{-1/2}
 │   │   └── normalize.py            # Median heuristic, shared utility
 │   │
 │   ├── coupling/                   # Entropic OT solvers
@@ -45,7 +46,8 @@ etd/
 │   │
 │   ├── proposals/                  # Proposal generation
 │   │   ├── __init__.py
-│   │   └── langevin.py             # Score-guided + score-free, optional precond
+│   │   ├── langevin.py             # Score-guided + score-free, optional precond
+│   │   └── preconditioner.py       # Cholesky + RMSProp preconditioner computation
 │   │
 │   ├── update/                     # Particle update rules
 │   │   ├── __init__.py

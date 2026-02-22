@@ -375,9 +375,26 @@ validated experimentally.
 
 ## Preconditioner
 
-Diagonal RMSProp-style accumulator built from score evaluations.
+ETD supports two preconditioner types via a nested `PreconditionerConfig`:
 
-### Accumulator Update
+| Type | State | Shape | Captures |
+|------|-------|-------|----------|
+| `"rmsprop"` | `precond_accum` | $(d,)$ | Per-axis curvature (diagonal) |
+| `"cholesky"` | `cholesky_factor` | $(d, d)$ | Full covariance (correlations) |
+| `"none"` | — | — | No preconditioning |
+
+Both state fields always exist for pytree stability; only the relevant one
+is updated each step. The config type is static (frozen dataclass), so
+Python `if` resolves at JIT trace time with zero runtime overhead.
+
+Each type has two independent application axes:
+
+- **`proposals: true`** — Scale proposal drift and noise.
+- **`cost: true`** — Whiten cost matrix distances.
+
+### RMSProp (Diagonal)
+
+Accumulator update:
 
 $$G_t = \beta \, G_{t-1} + (1 - \beta) \, \text{diag}\!\left(\frac{1}{N}\sum_i s_i \odot s_i\right)$$
 
@@ -385,35 +402,80 @@ where $s_i = \nabla \log \pi(x_i)$ and $\beta = 0.9$. Initialize $G_0 = \mathbf{
 
 The inverse square root $P = 1/\sqrt{G_t + \delta}$ is a $(d,)$ vector.
 
-### Usage: `precondition` vs `whiten`
+**Proposals:** Mean $x_i + \alpha \, P \odot s_i$, variance $\text{diag}(\sigma^2 P^2)$.
+Stretches proposals along low-curvature directions.
 
-The preconditioner $P$ has two independent uses, controlled by separate
-config flags:
+**Cost whitening:** Distances in whitened coordinates $\tilde{x} = P^{-1} x$,
+e.g. $C_{ij} = \|\tilde{x}_i - \tilde{y}_j\|^2 / 2$.
 
-1. **`precondition: true` → Proposals:** Mean $x_i + \alpha \, P \odot s_i$,
-   variance $\text{diag}(2\alpha\rho \, P^2)$. Stretches proposals along
-   low-curvature directions.
-2. **`whiten: true` → Cost whitening:** All cost functions compute
-   distances in whitened coordinates $\tilde{x} = P^{-1} x$, e.g.
-   $C_{ij} = \|\tilde{x}_i - \tilde{y}_j\|^2 / 2$ for Euclidean. Makes
-   the coupling sensitive to displacements along high-curvature directions.
+### Cholesky (Full Covariance)
 
-These axes are independent — you can whiten costs without preconditioning
-proposals and vice versa. The accumulator $G_t$ is maintained whenever
-**either** flag is true (`needs_precond_accum` property).
+Computes a full-covariance Cholesky factor $L$ from the particle ensemble
+each step, enabling proposals and costs that capture inter-dimensional
+correlations.
 
-| `precondition` | `whiten` | Accumulator | P → proposals | P → cost |
-|:-:|:-:|:-:|:-:|:-:|
-| F | F | No | No | No |
-| T | F | Yes | Yes | No |
-| F | T | Yes | No | Yes |
-| T | T | Yes | Yes | Yes |
+**Computation (once per step, before proposals):**
+
+1. Sample covariance: $\hat{\Sigma} = \text{Cov}(\text{data})$ — shape $(d, d)$
+2. Ledoit-Wolf shrinkage: $\Sigma = (1-s)\hat{\Sigma} + s\,\text{diag}(\text{diag}(\hat{\Sigma}))$
+3. Jitter: $\Sigma_{\text{reg}} = \Sigma + \delta I$
+4. Optional EMA: $\Sigma_{\text{reg}} = \beta_{\text{ema}} \Sigma_{\text{prev}} + (1-\beta_{\text{ema}}) \Sigma_{\text{reg}}$
+5. Cholesky: $L = \text{chol}(\Sigma_{\text{reg}})$
+
+The `source` field controls what data the covariance is computed from:
+
+| `source` | Data | Captures |
+|----------|------|----------|
+| `"scores"` (default) | $\nabla \log \pi(x_i)$ | Target curvature |
+| `"positions"` | $x_i$ | Ensemble spread |
+
+When `source="scores"`, the `use_unclipped_scores` flag controls whether
+raw or clipped scores are used (raw scores better capture the true Hessian
+structure but may be noisy on stiff targets).
+
+**EMA note:** EMA is applied on the *covariance matrix* before Cholesky
+factoring, not on $L$ directly. Direct EMA on $L$ does not preserve
+positive-definiteness.
+
+**Proposals:**
+$$y_{ij} = x_i + \alpha \, (LL^\top s_i) + \sigma \, L \xi_{ij}, \quad \xi_{ij} \sim \mathcal{N}(0, I)$$
+
+This gives $y_{ij} \sim \mathcal{N}(x_i + \alpha \Sigma s_i,\; \sigma^2 \Sigma)$.
+The IS correction uses the corresponding full-covariance Gaussian density
+with log-determinant from $L$.
+
+**Cost whitening:** $\tilde{x} = L^{-1} x$ via triangular solve, then
+standard distance in whitened space.
+
+**Cost:** $O(Nd^2)$ for covariance, $O(d^3)$ for Cholesky. Negligible for $d < 100$.
+
+### Config
+
+```yaml
+preconditioner:
+  type: "cholesky"        # "none" | "rmsprop" | "cholesky"
+  proposals: true          # apply to proposal drift + noise
+  cost: true               # apply to cost whitening
+  source: "scores"         # "scores" | "positions"
+  use_unclipped_scores: false
+  # RMSProp params
+  beta: 0.9
+  delta: 1.0e-8
+  # Cholesky params
+  shrinkage: 0.1           # Ledoit-Wolf shrinkage toward diagonal
+  jitter: 1.0e-6           # diagonal jitter for PD guarantee
+  ema_beta: 0.0            # 0 = fresh each step; >0 = EMA smoothing
+```
+
+### Legacy Flat Fields
+
+The flat fields `precondition`, `whiten`, `precond_beta`, `precond_delta`
+are still supported for backward compatibility and map to
+`PreconditionerConfig(type="rmsprop", ...)`. The nested config takes
+precedence when both are present.
 
 **Mahalanobis alias:** `cost: "mahalanobis"` is a deprecated alias for
 `cost: "euclidean"` with `whiten: true`. It emits a `FutureWarning`.
-
-The preconditioner lives in `ETDState.precond_accum` as a $(d,)$ array.
-Updated during proposal generation. No separate `Preconditioner` class.
 
 ### Adaptive Score Clipping
 

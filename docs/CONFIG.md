@@ -64,9 +64,26 @@ experiment:
   # --- Update-specific ---
   # step_size: 1.0             # (0, 1], damping factor
 
-  # --- Optional features ---
+  # --- Preconditioner (nested config) ---
+  # preconditioner:
+  #   type: "cholesky"         # "none" | "rmsprop" | "cholesky"
+  #   proposals: true           # apply to proposal drift + noise
+  #   cost: true                # apply to cost whitening
+  #   source: "scores"          # "scores" | "positions"
+  #   use_unclipped_scores: false
+  #   shrinkage: 0.1            # Cholesky: Ledoit-Wolf shrinkage
+  #   jitter: 1.0e-6            # Cholesky: diagonal jitter
+  #   ema_beta: 0.0             # Cholesky: EMA on covariance (0 = fresh)
+  #   beta: 0.9                 # RMSProp: EMA decay
+  #   delta: 1.0e-8             # RMSProp: epsilon
+
+  # --- Legacy flat fields (backward-compatible) ---
   # precondition: false
+  # whiten: false
   # precond_beta: 0.9
+  # precond_delta: 1.0e-8
+
+  # --- Other optional features ---
   # dv_feedback: false
   # dv_weight: 1.0
   # sdd: false                 # Sinkhorn divergence debiasing
@@ -185,8 +202,11 @@ class ETDConfig:
     # Update
     step_size: float = 1.0
 
-    # Preconditioner
+    # Preconditioner (nested config, replaces flat fields)
+    preconditioner: PreconditionerConfig = PreconditionerConfig()
+    # Legacy flat fields still accepted for backward compat:
     precondition: bool = False
+    whiten: bool = False
     precond_beta: float = 0.9
     precond_delta: float = 1e-8
 
