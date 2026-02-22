@@ -50,9 +50,9 @@ experiment:
         cost: true
         source: positions
         ema_beta: 0.8
-      n_proposals: [25, 50]
+      n_proposals: 25
       sinkhorn_tol: 1e-3
-      epsilon: [0.05, 0.1, 0.5, 1.0]
+      epsilon: 0.05
       alpha: 0.5
 
     # - label: "ETD-B-Maha"
