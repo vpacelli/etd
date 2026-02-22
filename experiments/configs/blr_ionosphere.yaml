@@ -54,7 +54,7 @@ experiment:
       use_score: true
       precondition: false
       whiten: false
-      n_proposals: 50
+      n_proposals: 25
       sinkhorn_tol: 1e-3
       epsilon: 0.1
       alpha: 0.1
