@@ -300,6 +300,112 @@ Default $\eta = 1.0$ (full step).
 
 ---
 
+## 6. MCMC Mutation (ETD-SMC)
+
+ETD converges rapidly in the global phase — particles find the right basins
+within a few iterations — but local refinement is slow. The coupling flattens
+as particles approach the target, and categorical resampling introduces noise
+when positions are already approximately correct. The variance ratio on BLR
+(~0.38 vs MALA's ~0.90) confirms the ensemble is underdispersed.
+
+The fix completes the SMC structure: **reweight → resample → mutate**. After
+transport resampling, apply a $\pi$-invariant MCMC kernel independently to
+each particle. The mutation targets $\pi$ directly — no IS correction,
+density tracking, or trajectory storage is required. The MH acceptance
+ratio ensures exact $\pi$-invariance regardless of step size, so the mutation
+can only improve or maintain approximation quality.
+
+### Why mutation doesn't need IS correction
+
+After categorical resampling, particle $i$ sits at position $y_{j(i)}$. This
+is an approximate sample from the transported distribution $\rho_{k+1}$.
+Applying a $\pi$-invariant kernel $K$ (e.g., MALA with MH correction) yields
+$x_i' \sim K(\cdot | y_{j(i)})$. If $\rho_{k+1} = \pi$, then $K$ preserves
+$\pi$ exactly. If $\rho_{k+1} \neq \pi$, then $K$ moves $\rho_{k+1}$ closer
+to $\pi$ by ergodicity. The mutation kernel only needs access to $\pi$ (via
+scores or density ratios), not the transported distribution.
+
+### Pseudocode
+
+```
+After step 6 (categorical resample), for each particle i independently:
+
+  Compute log π(x_i) and (for MALA) ∇log π(x_i)
+
+  For t = 1..K:
+    # Preconditioned MALA proposal
+    μ_fwd = x_i + (h/2) Σ ∇log π(x_i)
+    x_prop = μ_fwd + √h L ξ,    ξ ~ N(0, I)
+
+    # Evaluate proposal
+    log π(x_prop), ∇log π(x_prop)
+    μ_rev = x_prop + (h/2) Σ ∇log π(x_prop)
+
+    # MH acceptance
+    log α = log π(x_prop) - log π(x_i)
+            + log N(x_i; μ_rev, h Σ) - log N(x_prop; μ_fwd, h Σ)
+    Accept x_i ← x_prop with prob min(1, exp(log α))
+```
+
+where $L$ is the ensemble Cholesky factor ($\Sigma = LL^\top$), $h$ is the
+mutation step size, and $K$ is the number of MCMC sub-steps. Score clipping
+is applied (inherits `score_clip` from the parent config by default).
+
+### MALA kernel (Cholesky mode)
+
+The preconditioned MALA proposal for particle $i$:
+
+$$x^{\text{prop}} = x_i + \frac{h}{2}\, \Sigma\, \nabla\log\pi(x_i) + \sqrt{h}\, L\, \xi, \quad \xi \sim \mathcal{N}(0, I)$$
+
+The forward/reverse log-densities use triangular solve for numerical stability:
+$\log q(y|x) = -\frac{1}{2h}\|L^{-1}(y - \mu)\|^2 + \text{const}$, computed
+via `jax.scipy.linalg.solve_triangular`.
+
+When `use_cholesky: false`, the kernel falls back to isotropic mode
+($\Sigma = I$, $L = I$), simplifying to standard MALA.
+
+### Random-Walk MH (score-free)
+
+For targets where scores are unavailable or expensive:
+
+$$x^{\text{prop}} = x_i + \sqrt{h}\, L\, \xi$$
+
+The symmetric proposal gives a MH ratio that depends only on density ratios:
+$\log\alpha = \log\pi(x^{\text{prop}}) - \log\pi(x_i)$. Zero score evaluations.
+
+### Two-phase convergence
+
+ETD-SMC exhibits two distinct phases:
+
+1. **Transport-dominated:** The coupling is informative; particles make large
+   coordinated moves. Energy distance drops rapidly. Mutation contributes
+   marginally (particles are far from $\pi$).
+
+2. **Mutation-dominated:** Particles are in the right basins but underdispersed.
+   The coupling softens. MALA steps with MH correction explore local basins
+   while respecting $\pi$ exactly. Transport maintains global coordination
+   (preventing mode collapse) but contributes less to distributional improvement.
+
+### Ordering constraints
+
+- **Mutation after resampling:** The transport step provides globally
+  coordinated placement; mutation refines locally. Reversing would apply MCMC
+  to stale positions and discard refinement via resampling.
+- **Cholesky after mutation:** Update $\Sigma$ from post-mutation positions
+  (closer to $\pi$), giving a better covariance estimate for the next step.
+
+### Mutation hyperparameters
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `mutation.kernel` | `"none"` | `"none"` / `"mala"` / `"rwm"` |
+| `mutation.n_steps` | 5 | MCMC sub-steps per ETD iteration |
+| `mutation.step_size` | 0.01 | MALA/RWM step size $h$ |
+| `mutation.use_cholesky` | true | Use ensemble Cholesky $\Sigma$ for proposal |
+| `mutation.score_clip` | None | None → inherit from parent config |
+
+---
+
 ## DV Feedback (Dual Potential Augmentation)
 
 ### Theory

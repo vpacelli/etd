@@ -28,7 +28,7 @@ This is research code for a paper, not production software.
 etd/
 ├── src/etd/
 │   ├── __init__.py
-│   ├── types.py                    # Particles, Target protocol, ETDState
+│   ├── types.py                    # Target protocol, ETDState, MutationConfig
 │   │
 │   ├── costs/                      # Cost matrix construction
 │   │   ├── __init__.py             # get_cost_fn() registry
@@ -43,6 +43,10 @@ etd/
 │   │   ├── sinkhorn.py             # Log-domain balanced Sinkhorn
 │   │   ├── unbalanced.py           # Log-domain unbalanced (KL penalty)
 │   │   └── gibbs.py                # Closed-form softmax (SR, 0 iterations)
+│   │
+│   ├── primitives/                 # Reusable MCMC kernels
+│   │   ├── __init__.py
+│   │   └── mutation.py             # mala_kernel, rwm_kernel, mutate (lax.scan)
 │   │
 │   ├── proposals/                  # Proposal generation
 │   │   ├── __init__.py
@@ -69,6 +73,7 @@ etd/
 │   │   ├── __init__.py
 │   │   ├── svgd.py
 │   │   ├── ula.py
+│   │   ├── mala.py                 # MALA with optional Cholesky preconditioning
 │   │   └── mppi.py
 │   │
 │   ├── diagnostics/
@@ -119,7 +124,7 @@ etd/
                      │ imports
 ┌────────────────────▼─────────────────────────────────┐
 │  PRIMITIVES  src/etd/{costs,coupling,proposals,...}   │
-│  costs, coupling solvers, proposals, update rules    │
+│  costs, coupling, proposals, update rules, mutation  │
 └──────────────────────────────────────────────────────┘
 ```
 

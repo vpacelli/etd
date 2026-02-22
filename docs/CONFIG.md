@@ -83,6 +83,14 @@ experiment:
   # precond_beta: 0.9
   # precond_delta: 1.0e-8
 
+  # --- MCMC Mutation (nested config) ---
+  # mutation:
+  #   kernel: "mala"           # "none" | "mala" | "rwm"
+  #   n_steps: 5               # MCMC sub-steps per ETD iteration
+  #   step_size: 0.01          # MALA/RWM step size h
+  #   use_cholesky: true       # Use ensemble Cholesky for proposal covariance
+  #   score_clip: null          # null → inherit from parent config
+
   # --- Other optional features ---
   # dv_feedback: false
   # dv_weight: 1.0
@@ -104,6 +112,16 @@ experiment:
   method: "ula"
   step_size: 0.01
   # score_clip: 5.0
+
+- label: "MALA"
+  type: "baseline"
+  method: "mala"
+  step_size: 0.01
+  # score_clip: 5.0
+  # use_cholesky: false        # Enable Cholesky preconditioning
+  # cholesky_shrinkage: 0.1    # Ledoit-Wolf shrinkage (when use_cholesky: true)
+  # cholesky_jitter: 1.0e-6    # Diagonal jitter (when use_cholesky: true)
+  # cholesky_ema_beta: 0.0     # EMA on covariance (when use_cholesky: true)
 
 - label: "MPPI"
   type: "baseline"
@@ -171,6 +189,24 @@ target:
 
 ## Dataclasses
 
+### MutationConfig
+
+```python
+@dataclass(frozen=True)
+class MutationConfig:
+    kernel: str = "none"              # "none" | "mala" | "rwm"
+    n_steps: int = 5                  # MCMC sub-steps per ETD iteration
+    step_size: float = 0.01           # MALA/RWM step size h
+    use_cholesky: bool = True         # Use ensemble Cholesky for proposal
+    score_clip: Optional[float] = None  # None → inherit from parent
+
+    @property
+    def active(self) -> bool: return self.kernel != "none"
+
+    @property
+    def needs_score(self) -> bool: return self.kernel == "mala"
+```
+
 ### ETDConfig
 
 ```python
@@ -209,6 +245,9 @@ class ETDConfig:
     whiten: bool = False
     precond_beta: float = 0.9
     precond_delta: float = 1e-8
+
+    # MCMC Mutation (nested config)
+    mutation: MutationConfig = MutationConfig()
 
     # DV feedback
     dv_feedback: bool = False

@@ -219,6 +219,34 @@ No clipped labels or overlapping text.
 
 ---
 
+## Phase 9: MCMC Mutation (ETD-SMC)
+
+**Goal:** Add optional post-transport MCMC mutation to ETD and SDD,
+completing the SMC structure (reweight → resample → mutate). Two kernels:
+preconditioned MALA (Cholesky) and Random-Walk MH (score-free). The MALA
+baseline also gains Cholesky preconditioning for fair ablations.
+
+### Deliverables
+
+- [x] `types.py`: `MutationConfig` frozen dataclass, `ETDConfig.mutation`, `ETDState.log_prob/scores`
+- [x] `primitives/mutation.py`: `mala_kernel`, `rwm_kernel`, `mutate` (lax.scan dispatcher)
+- [x] `step.py`: Mutation block after transport, 3-way key split, preconditioner from post-mutation positions
+- [x] `extensions/sdd.py`: Mirror mutation integration (SDDState, SDDConfig, init, step)
+- [x] `baselines/mala.py`: Cholesky preconditioning mode via `mala_kernel`
+- [x] `experiments/run.py`: `_resolve_mutation_config`, YAML wiring
+- [x] `experiments/configs/blr_mutation.yaml`: Example config
+- [x] Integration tests: convergence, acceptance rate, JIT/scan compatibility
+
+### Gate
+
+```
+pytest tests/test_mutation.py tests/test_mutation_integration.py tests/test_mala.py tests/test_runner.py -x
+```
+
+All tests pass.
+
+---
+
 ## What If Things Go Wrong
 
 | Symptom | Likely Cause | Fix |
