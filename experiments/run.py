@@ -47,7 +47,7 @@ from etd.diagnostics.metrics import (
 from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
 from etd.targets import get_target
-from etd.types import ETDConfig, PreconditionerConfig
+from etd.types import ETDConfig, MutationConfig, PreconditionerConfig
 
 console = Console()
 
@@ -338,6 +338,43 @@ def _resolve_preconditioner_config(kwargs: dict) -> dict:
     return kwargs
 
 
+def _resolve_mutation_config(kwargs: dict) -> dict:
+    """Resolve mutation config from YAML kwargs.
+
+    Converts a nested ``mutation:`` dict to a :class:`MutationConfig`
+    instance::
+
+        mutation:
+          kernel: "mala"
+          n_steps: 5
+          step_size: 0.01
+          use_cholesky: true
+
+    Args:
+        kwargs: Mutable dict of algorithm kwargs.
+
+    Returns:
+        The same dict (mutated in-place).
+    """
+    raw = kwargs.get("mutation")
+    if isinstance(raw, dict):
+        raw = dict(raw)  # copy to avoid mutating YAML entry
+        _BOOL_KEYS = {"use_cholesky"}
+        _FLOAT_KEYS = {"step_size", "score_clip"}
+        _INT_KEYS = {"n_steps"}
+        for k in _BOOL_KEYS:
+            if k in raw:
+                raw[k] = bool(raw[k])
+        for k in _FLOAT_KEYS:
+            if k in raw and raw[k] is not None:
+                raw[k] = float(raw[k])
+        for k in _INT_KEYS:
+            if k in raw:
+                raw[k] = int(raw[k])
+        kwargs["mutation"] = MutationConfig(**raw)
+    return kwargs
+
+
 def build_algo_config(
     entry: dict,
     shared: dict,
@@ -412,8 +449,9 @@ def build_algo_config(
         if schedules:
             kwargs["schedules"] = tuple(schedules)
 
-        # Resolve nested preconditioner config (dict → PreconditionerConfig)
+        # Resolve nested config objects (dict → frozen dataclass)
         _resolve_preconditioner_config(kwargs)
+        _resolve_mutation_config(kwargs)
 
         if is_sdd:
             from etd.extensions.sdd import SDDConfig

@@ -1,0 +1,71 @@
+experiment:
+  name: blr-mutation-ablation
+  seeds: [0, 1, 2]
+
+  target:
+    type: blr
+    params:
+      dataset: sonar
+
+  shared:
+    n_particles: 100
+    n_iterations: 500
+    init:
+      type: gaussian
+      scale: 0.1
+
+  checkpoints: [0, 50, 100, 200, 300, 500]
+
+  metrics:
+    - mean_error
+    - variance_ratio_ref
+    - mean_rmse
+
+  algorithms:
+    # --- ETD-B baseline (no mutation) ---
+    - label: ETD-B
+      coupling: balanced
+      epsilon: 0.1
+      alpha: 0.05
+      n_proposals: 25
+      score_clip: 5.0
+
+    # --- ETD-B + MALA mutation ---
+    - label: ETD-B+MALA
+      coupling: balanced
+      epsilon: 0.1
+      alpha: 0.05
+      n_proposals: 25
+      score_clip: 5.0
+      mutation:
+        kernel: mala
+        n_steps: 5
+        step_size: 0.01
+        use_cholesky: true
+      preconditioner:
+        type: cholesky
+        proposals: true
+        cost: true
+        shrinkage: 0.1
+
+    # --- ETD-B + RWM mutation (score-free) ---
+    - label: ETD-B+RWM
+      coupling: balanced
+      epsilon: 0.1
+      alpha: 0.05
+      n_proposals: 25
+      score_clip: 5.0
+      use_score: false
+      mutation:
+        kernel: rwm
+        n_steps: 5
+        step_size: 0.01
+        use_cholesky: true
+
+    # --- MALA baseline (with Cholesky) ---
+    - label: MALA-Chol
+      type: baseline
+      method: mala
+      step_size: 0.01
+      score_clip: 5.0
+      use_cholesky: true

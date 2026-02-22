@@ -16,6 +16,7 @@ import yaml
 
 from experiments.run import (
     _compute_segments,
+    _resolve_mutation_config,
     build_algo_config,
     build_algo_label,
     compute_metrics,
@@ -28,6 +29,7 @@ from experiments.run import (
     maybe_jit,
 )
 from etd.targets import get_target
+from etd.types import MutationConfig
 from etd.targets.gmm import GMMTarget
 from etd.types import ETDConfig
 
@@ -318,3 +320,63 @@ class TestComputeSegments:
         """Unsorted checkpoints are handled correctly."""
         segs = _compute_segments([10, 5], n_iterations=10)
         assert segs == [(1, 5, 5), (6, 5, 10)]
+
+
+# ---------------------------------------------------------------------------
+# Mutation config resolution
+# ---------------------------------------------------------------------------
+
+class TestResolveMutationConfig:
+    """_resolve_mutation_config converts dict → MutationConfig."""
+
+    def test_dict_to_mutation_config(self):
+        kwargs = {
+            "mutation": {
+                "kernel": "mala",
+                "n_steps": 5,
+                "step_size": 0.01,
+                "use_cholesky": True,
+            },
+        }
+        _resolve_mutation_config(kwargs)
+        mc = kwargs["mutation"]
+        assert isinstance(mc, MutationConfig)
+        assert mc.kernel == "mala"
+        assert mc.n_steps == 5
+        assert mc.step_size == 0.01
+        assert mc.use_cholesky is True
+
+    def test_build_algo_config_with_mutation(self):
+        """ETD entry with mutation block → correct ETDConfig."""
+        entry = {
+            "label": "test",
+            "coupling": "balanced",
+            "epsilon": 0.1,
+            "alpha": 0.05,
+            "n_proposals": 10,
+            "mutation": {
+                "kernel": "mala",
+                "n_steps": 3,
+                "step_size": 0.02,
+            },
+        }
+        shared = {"n_particles": 50, "n_iterations": 100}
+        config, init_fn, step_fn, is_bl = build_algo_config(entry, shared)
+        assert not is_bl
+        assert config.mutation.kernel == "mala"
+        assert config.mutation.n_steps == 3
+        assert config.mutation.step_size == 0.02
+
+    def test_mutation_default_off(self):
+        """Entry without mutation → MutationConfig(kernel='none')."""
+        entry = {
+            "label": "test",
+            "coupling": "balanced",
+            "epsilon": 0.1,
+            "alpha": 0.05,
+            "n_proposals": 10,
+        }
+        shared = {"n_particles": 50, "n_iterations": 100}
+        config, _, _, _ = build_algo_config(entry, shared)
+        assert config.mutation.kernel == "none"
+        assert not config.mutation.active
