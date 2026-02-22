@@ -49,15 +49,19 @@ experiment:
 
     # - label: "ETD-B-Linf"
     - label: ETD-B
-      cost: "linf"
+      cost: euclidean
       coupling: "balanced"
       use_score: true
-      precondition: false
-      whiten: false
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        source: positions
+        ema_beta: 0.8
       n_proposals: 25
       sinkhorn_tol: 1e-3
-      epsilon: 0.1
-      alpha: 0.1
+      epsilon: 0.05
+      alpha: 1.0
       step_size: 0.5
 
     # - label: "ETD-B-IMQ"
