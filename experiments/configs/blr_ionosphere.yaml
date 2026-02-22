@@ -10,12 +10,12 @@ experiment:
 
   shared:
     n_particles: 100
-    n_iterations: 2000
+    n_iterations: 4000
     init:
       type: "gaussian"
       scale: 0.1
 
-  checkpoints: [0, 10, 50, 100, 250, 500, 1000, 2000]
+  checkpoints: [0, 10, 50, 100, 250, 500, 1000, 2000, 4000]
 
   metrics:
     - "sliced_wasserstein"
@@ -54,7 +54,7 @@ experiment:
       use_score: true
       precondition: false
       whiten: false
-      n_proposals: [10, 25, 50]
+      n_proposals: 50
       sinkhorn_tol: 1e-3
       epsilon: 0.1
       alpha: 0.1
