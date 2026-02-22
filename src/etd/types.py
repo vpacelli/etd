@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import NamedTuple, Protocol, runtime_checkable
+from typing import NamedTuple, Optional, Protocol, runtime_checkable
 
 import jax.numpy as jnp
 
@@ -140,6 +140,46 @@ def make_preconditioner_config(
 
 
 # ---------------------------------------------------------------------------
+# Mutation config — frozen dataclass (static arg for JIT)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MutationConfig:
+    """Configuration for post-transport MCMC mutation.
+
+    Adds MCMC mutation steps after transport resampling, completing the
+    SMC structure: reweight → resample → mutate.  The mutation is
+    π-invariant (MH correction), so it can only improve or maintain
+    approximation quality.
+
+    Attributes:
+        kernel: MCMC kernel type: ``"none"``, ``"mala"``, or ``"rwm"``.
+        n_steps: Number of MCMC sub-steps per ETD iteration (static for
+            ``lax.scan``).
+        step_size: MALA/RWM step size *h*.
+        use_cholesky: Use ensemble Cholesky factor for proposal covariance.
+        score_clip: Score clipping threshold for MALA.  ``None`` inherits
+            from the parent config's ``score_clip``.
+    """
+
+    kernel: str = "none"              # "none" | "mala" | "rwm"
+    n_steps: int = 5                  # MCMC sub-steps per ETD iteration
+    step_size: float = 0.01           # MALA/RWM step size h
+    use_cholesky: bool = True         # Use ensemble Cholesky for proposal cov
+    score_clip: Optional[float] = None  # None → inherit from parent config
+
+    @property
+    def active(self) -> bool:
+        """Whether mutation is enabled."""
+        return self.kernel != "none"
+
+    @property
+    def needs_score(self) -> bool:
+        """Whether the kernel requires score evaluations."""
+        return self.kernel == "mala"
+
+
+# ---------------------------------------------------------------------------
 # ETD state — a JAX-compatible NamedTuple (native pytree)
 # ---------------------------------------------------------------------------
 
@@ -221,6 +261,11 @@ class ETDConfig:
         default_factory=PreconditionerConfig,
     )
 
+    # --- Mutation (MCMC post-transport) ---
+    mutation: MutationConfig = field(
+        default_factory=MutationConfig,
+    )
+
     # Legacy compat — populated by make_preconditioner_config() in the runner.
     # Deprecated: use ``preconditioner`` instead.
     precondition: bool = False
@@ -234,6 +279,28 @@ class ETDConfig:
 
     # --- Schedules ---
     schedules: tuple = ()  # (("dv_weight", Schedule(...)), ("epsilon", Schedule(...)), ...)
+
+    def __post_init__(self):
+        if (
+            self.mutation.active
+            and self.mutation.use_cholesky
+            and not self.preconditioner.is_cholesky
+        ):
+            warnings.warn(
+                "mutation.use_cholesky=True but preconditioner.type is not "
+                "'cholesky'. A Cholesky factor will be auto-computed for "
+                "mutation each step (O(Nd² + d³)). Consider enabling "
+                "Cholesky preconditioning to share the computation.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    @property
+    def needs_cholesky(self) -> bool:
+        """Whether a Cholesky factor is needed (preconditioner or mutation)."""
+        return self.preconditioner.is_cholesky or (
+            self.mutation.active and self.mutation.use_cholesky
+        )
 
     @property
     def needs_precond_accum(self) -> bool:

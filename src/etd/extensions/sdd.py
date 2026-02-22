@@ -30,7 +30,7 @@ from etd.proposals.preconditioner import (
     update_rmsprop_accum,
 )
 from etd.schedule import Schedule, resolve_param
-from etd.types import PreconditionerConfig, Target
+from etd.types import MutationConfig, PreconditionerConfig, Target
 from etd.update import systematic_resample
 from etd.weights import importance_weights
 
@@ -108,6 +108,12 @@ class SDDConfig:
     preconditioner: PreconditionerConfig = field(
         default_factory=PreconditionerConfig,
     )
+
+    # --- Mutation (MCMC post-transport) ---
+    mutation: MutationConfig = field(
+        default_factory=MutationConfig,
+    )
+
     precondition: bool = False
     whiten: bool = False
     precond_beta: float = 0.9
@@ -122,6 +128,28 @@ class SDDConfig:
 
     # --- Schedules ---
     schedules: tuple = ()
+
+    def __post_init__(self):
+        if (
+            self.mutation.active
+            and self.mutation.use_cholesky
+            and not self.preconditioner.is_cholesky
+        ):
+            warnings.warn(
+                "mutation.use_cholesky=True but preconditioner.type is not "
+                "'cholesky'. A Cholesky factor will be auto-computed for "
+                "mutation each step (O(Nd² + d³)). Consider enabling "
+                "Cholesky preconditioning to share the computation.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    @property
+    def needs_cholesky(self) -> bool:
+        """Whether a Cholesky factor is needed (preconditioner or mutation)."""
+        return self.preconditioner.is_cholesky or (
+            self.mutation.active and self.mutation.use_cholesky
+        )
 
     @property
     def needs_precond_accum(self) -> bool:
