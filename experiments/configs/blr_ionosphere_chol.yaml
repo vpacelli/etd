@@ -49,7 +49,7 @@ experiment:
 
     # - label: "ETD-B-Linf"
     - label: ETD-B-Chol
-      cost: "euclidean"
+      cost: [euclidean, linf]
       coupling: "balanced"
       use_score: true
       preconditioner:
@@ -57,13 +57,10 @@ experiment:
         proposals: true
         cost: true
         source: positions
-        # use_unclipped_scores: false
-        # beta: 0.9
         ema_beta: 0.8
-        # delta: 1e-8
       n_proposals: 25
       sinkhorn_tol: 1e-3
-      epsilon: [0.01, 0.05, 0.1, 0.5, 1.0]
+      epsilon: 0.05
       alpha: 1.0
       step_size: 0.5
 
