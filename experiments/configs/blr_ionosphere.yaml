@@ -33,8 +33,8 @@ experiment:
       use_score: true
       n_proposals: 25
       sinkhorn_tol: 1e-5
-      epsilon: 0.1
-      alpha: [0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+      epsilon: [0.1, 0.05, 0.01]
+      alpha: 0.1
 
     - label: "ETD-B-Maha"
       cost: "mahalanobis"
@@ -43,8 +43,8 @@ experiment:
       precondition: true
       n_proposals: 25
       sinkhorn_tol: 1e-5
-      epsilon: 0.1
-      alpha: [0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+      epsilon: [0.1, 0.05, 0.01]
+      alpha: 0.05
 
     - label: "ETD-B-Linf"
       cost: "linf"
@@ -52,8 +52,8 @@ experiment:
       use_score: true
       n_proposals: 25
       sinkhorn_tol: 1e-5
-      epsilon: 0.1
-      alpha: [0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+      epsilon: [0.1, 0.05, 0.01]
+      alpha: 0.1
 
     # - label: "ETD-B-IMQ"
     #   cost:
