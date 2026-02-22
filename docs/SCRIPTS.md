@@ -11,7 +11,7 @@ experiments/
 ├── datasets.py         # Download, preprocess, store in DuckDB
 └── configs/
     ├── gmm_2d_4.yaml
-    ├── logistic_german.yaml
+    ├── blr_german.yaml
     └── sweeps/
         └── eps_sensitivity.yaml
 ```
@@ -171,10 +171,10 @@ and variance ratio.
 
 ```bash
 # Generate reference for a specific target
-python -m experiments.nuts --target logistic --dataset german_credit --n_samples 10000
+python -m experiments.nuts --target blr --dataset german_credit --n_samples 10000
 
 # Generate reference for a config's target
-python -m experiments.nuts --from-config configs/logistic_german.yaml
+python -m experiments.nuts --from-config configs/blr_german.yaml
 ```
 
 ### What It Does

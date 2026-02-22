@@ -1,7 +1,7 @@
 """DuckDB pipeline for UCI benchmark datasets.
 
-Downloads, preprocesses, and stores datasets used for Bayesian logistic
-regression benchmarks.  Categorical features are ordinal-encoded (via
+Downloads, preprocesses, and stores datasets used for BLR (Bayesian logistic
+regression) benchmarks.  Categorical features are ordinal-encoded (via
 ``pd.factorize``), then all features are standardized (mean=0, std=1).
 
 Usage:

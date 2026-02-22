@@ -63,7 +63,7 @@ scale = min(1.0, c / max(||s||, 1e-8))
 s_clipped = scale * s
 ```
 
-This is essential. Without clipping, Bayesian logistic regression diverges.
+This is essential. Without clipping, BLR diverges.
 
 ---
 

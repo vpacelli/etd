@@ -3,8 +3,8 @@
 ## Project
 
 Implement **Entropic Transport Descent (ETD)** for variational inference,
-benchmark it against baselines on mixture-of-Gaussians and Bayesian logistic
-regression targets, and produce comparison figures for a NeurIPS submission.
+benchmark it against baselines on mixture-of-Gaussians and BLR
+targets, and produce comparison figures for a NeurIPS submission.
 
 ## Your Role
 

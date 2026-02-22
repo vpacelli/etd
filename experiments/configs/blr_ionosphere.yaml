@@ -1,9 +1,9 @@
 experiment:
-  name: "logistic-ionosphere"
+  name: "blr-ionosphere"
   seeds: [0, 1, 2, 3, 4]
 
   target:
-    type: "logistic"
+    type: "blr"
     params:
       dataset: "ionosphere"
       prior_std: 5.0

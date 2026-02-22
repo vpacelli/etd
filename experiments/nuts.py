@@ -307,9 +307,9 @@ def main():
 
     from etd.targets import get_target
 
-    # Build target params — logistic gets dim from the dataset, not CLI
+    # Build target params — BLR gets dim from the dataset, not CLI
     target_params: Dict[str, Any] = {}
-    if args.target == "logistic":
+    if args.target == "blr":
         if args.dataset:
             target_params["dataset"] = args.dataset
         target_params["prior_std"] = args.prior_std

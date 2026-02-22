@@ -175,10 +175,10 @@ class TestBLRGate:
         """ETD mean RMSE vs NUTS should be <= SVGD RMSE."""
         from experiments.nuts import load_reference
         from etd.diagnostics.metrics import mean_rmse
-        from etd.targets.logistic import LogisticRegressionTarget
+        from etd.targets.blr import BLRTarget
 
-        target = LogisticRegressionTarget(dataset="german_credit", prior_std=5.0)
-        ref = load_reference("logistic", {"dataset": "german_credit", "prior_std": 5.0})
+        target = BLRTarget(dataset="german_credit", prior_std=5.0)
+        ref = load_reference("blr", {"dataset": "german_credit", "prior_std": 5.0})
         if ref is None:
             pytest.skip("NUTS reference not cached")
 
@@ -215,10 +215,10 @@ class TestBLRGate:
         """ETD variance ratio should be closer to 1.0 than SVGD."""
         from experiments.nuts import load_reference
         from etd.diagnostics.metrics import variance_ratio_vs_reference
-        from etd.targets.logistic import LogisticRegressionTarget
+        from etd.targets.blr import BLRTarget
 
-        target = LogisticRegressionTarget(dataset="german_credit", prior_std=5.0)
-        ref = load_reference("logistic", {"dataset": "german_credit", "prior_std": 5.0})
+        target = BLRTarget(dataset="german_credit", prior_std=5.0)
+        ref = load_reference("blr", {"dataset": "german_credit", "prior_std": 5.0})
         if ref is None:
             pytest.skip("NUTS reference not cached")
 
@@ -262,7 +262,7 @@ class TestBLRGate:
 class TestIntegration:
     def test_all_targets_registered(self):
         """All expected targets should be in the registry."""
-        expected = {"gaussian", "gmm", "banana", "funnel", "logistic"}
+        expected = {"gaussian", "gmm", "banana", "funnel", "blr"}
         assert expected.issubset(set(TARGETS.keys())), \
             f"Missing: {expected - set(TARGETS.keys())}"
 

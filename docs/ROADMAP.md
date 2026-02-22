@@ -139,7 +139,7 @@ paper. Implement SDD for comparison.
 
 - [ ] `targets/banana.py`: Banana-shaped posterior
 - [ ] `targets/funnel.py`: Neal's funnel
-- [ ] `targets/logistic.py`: Bayesian logistic regression (German Credit, Australian)
+- [ ] `targets/blr.py`: Bayesian logistic regression (German Credit, Australian)
 - [ ] `update/barycentric.py`: Barycentric projection with step size
 - [ ] `extensions/sdd.py`: SDD-RB (self-coupling subtraction)
 - [ ] NUTS reference sampler integration (numpyro)

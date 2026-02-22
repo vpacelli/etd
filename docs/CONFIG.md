@@ -18,7 +18,7 @@ experiment:
   seeds: list[int]             # Random seeds for replication
 
   target:
-    type: str                  # "gaussian" | "gmm" | "banana" | "funnel" | "logistic"
+    type: str                  # "gaussian" | "gmm" | "banana" | "funnel" | "blr"
     params: dict               # Type-specific (see §Targets below)
 
   shared:
@@ -139,10 +139,10 @@ target:
     scale: 3.0                 # controls funnel width
 ```
 
-### Bayesian Logistic Regression
+### Bayesian Logistic Regression (BLR)
 ```yaml
 target:
-  type: "logistic"
+  type: "blr"
   params:
     dataset: "german_credit"   # "german_credit" | "australian"
     prior_std: 5.0

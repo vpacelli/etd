@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 
 
-class LogisticRegressionTarget:
+class BLRTarget:
     """Bayesian logistic regression posterior.
 
     Satisfies the :class:`~etd.types.Target` protocol.

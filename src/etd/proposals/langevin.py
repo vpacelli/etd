@@ -25,7 +25,7 @@ def clip_scores(
     """Clip score vectors to a maximum Euclidean norm.
 
     Essential for stability on targets with heavy tails or sharp
-    gradients (e.g., Bayesian logistic regression).
+    gradients (e.g., BLR).
 
     Args:
         scores: Score vectors, shape ``(N, d)``.

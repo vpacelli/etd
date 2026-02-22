@@ -1,11 +1,11 @@
-"""Tests for LogisticRegressionTarget (BLR)."""
+"""Tests for BLRTarget."""
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from etd.targets.logistic import LogisticRegressionTarget
+from etd.targets.blr import BLRTarget
 from etd.types import Target
 
 
@@ -27,7 +27,7 @@ def synthetic_data():
 @pytest.fixture
 def blr_target(synthetic_data):
     X, y = synthetic_data
-    return LogisticRegressionTarget(X=X, y=y, prior_std=5.0)
+    return BLRTarget(X=X, y=y, prior_std=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ class TestProtocol:
 
     def test_registry(self):
         from etd.targets import TARGETS
-        assert "logistic" in TARGETS
+        assert "blr" in TARGETS
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ class TestProtocol:
 class TestConstruction:
     def test_requires_data_or_dataset(self):
         with pytest.raises(ValueError, match="Must provide"):
-            LogisticRegressionTarget()
+            BLRTarget()
 
     def test_prior_variance(self, blr_target):
         """Variance should be prior_std^2."""

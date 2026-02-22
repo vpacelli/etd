@@ -1,9 +1,9 @@
 experiment:
-  name: "logistic-german"
+  name: "blr-german"
   seeds: [0, 1, 2, 3, 4]
 
   target:
-    type: "logistic"
+    type: "blr"
     params:
       dataset: "german_credit"
       prior_std: 5.0

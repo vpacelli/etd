@@ -61,7 +61,7 @@ etd/
 │   │   ├── gmm.py                  # Mixture of Gaussians
 │   │   ├── banana.py               # Banana-shaped posterior
 │   │   ├── funnel.py               # Neal's funnel
-│   │   └── logistic.py             # Bayesian logistic regression
+│   │   └── blr.py                  # Bayesian logistic regression
 │   │
 │   ├── baselines/                  # Comparison methods
 │   │   ├── __init__.py
