@@ -153,11 +153,13 @@ def step(
         preconditioner=preconditioner if config.precondition else None,
     )
 
-    # --- 2b. DV feedback: augment target weights with dual potential ---
-    # Uses g from *previous* iteration; on first step dual_g = zeros → no effect.
+    # --- 2b. DV feedback: augment target weights with clean per-particle signal ---
+    # Uses dv_potential from *previous* iteration (zeros on first step → no-op).
+    # dv_potential is (N,); expand to (N*M,) matching proposal ordering.
     if config.dv_feedback:
         dv_weight = resolve_param(config, "dv_weight", state.step)
-        log_b = log_b - dv_weight * state.dual_g
+        dv_expanded = jnp.repeat(state.dv_potential, config.n_proposals)  # (N*M,)
+        log_b = log_b - dv_weight * dv_expanded
         log_b = log_b - logsumexp(log_b)
 
     # --- 3. Cost matrix (whiten gates preconditioner for cost only) ---
@@ -213,6 +215,33 @@ def step(
         positions=state.positions,
     )
 
+    # --- 7b. Compute per-particle DV potential (c-transform + interpolation) ---
+    if config.dv_feedback:
+        # c-transform: remove log_b contamination baked into Sinkhorn g-update.
+        # Balanced: g = eps*(log_b - softmin), so contamination is eps*log_b.
+        # Unbalanced: g = eps*lam*(log_b - softmin), contamination is eps*lam*log_b.
+        # Gibbs: no iterative solve, duals are zeros → no meaningful signal.
+        if config.coupling == "balanced":
+            g_tilde = dual_g - eps * log_b
+        elif config.coupling == "unbalanced":
+            lam = config.rho / (1.0 + config.rho)
+            g_tilde = dual_g - eps * lam * log_b
+        else:  # gibbs
+            g_tilde = jnp.zeros_like(dual_g)
+
+        # Per-particle potential via update rule:
+        # categorical → index into g_tilde; barycentric → weighted sum.
+        if config.update == "categorical":
+            selected_g = g_tilde[update_aux["indices"]]          # (N,)
+        else:  # barycentric
+            selected_g = update_aux["weights"] @ g_tilde         # (N,)
+
+        # Interpolate: at step_size=1, pure target potential;
+        # at step_size<1, blend source (f) and target (g_tilde) potentials.
+        dv_potential = (1.0 - step_size) * dual_f + step_size * selected_g
+    else:
+        dv_potential = jnp.zeros(N)
+
     # --- 8. Preconditioner accumulator update ---
     # Update when either precondition or whiten is active (or mahalanobis alias).
     if config.needs_precond_accum or whiten:
@@ -227,7 +256,7 @@ def step(
         positions=new_positions,
         dual_f=dual_f,
         dual_g=dual_g,
-        dv_potential=jnp.zeros(N),  # placeholder — computed in Phase 3
+        dv_potential=dv_potential,
         precond_accum=new_precond,
         step=state.step + 1,
     )

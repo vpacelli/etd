@@ -261,10 +261,11 @@ def step(
         preconditioner=preconditioner if config.precondition else None,
     )
 
-    # 1c. DV feedback
+    # 1c. DV feedback: use clean per-particle signal (not raw dual_g_cross)
     if config.dv_feedback:
         dv_weight = resolve_param(config, "dv_weight", state.step)
-        log_b = log_b - dv_weight * state.dual_g_cross
+        dv_expanded = jnp.repeat(state.dv_potential, config.n_proposals)  # (N*M,)
+        log_b = log_b - dv_weight * dv_expanded
         log_b = log_b - logsumexp(log_b)
 
     # 1d. Cost matrix (cross — whiten gates preconditioner)
@@ -297,12 +298,27 @@ def step(
         positions=state.positions,
     )
 
+    # 1h. Compute per-particle DV potential (c-transform for cross-coupling)
+    # SDD always uses balanced Sinkhorn for cross-coupling.
+    if config.dv_feedback:
+        g_tilde_cross = dual_g_cross - eps * log_b     # (N*M,)
+        selected_g = g_tilde_cross[cross_aux["indices"]]  # (N,)
+        cross_step_size = resolve_param(config, "step_size", state.step)
+        dv_potential = (
+            (1.0 - cross_step_size) * dual_f_cross + cross_step_size * selected_g
+        )
+    else:
+        dv_potential = jnp.zeros(N)
+
     # ===================================================================
     # 2. Self-coupling (N×N between particles)
     # ===================================================================
 
-    # 2a. Self-cost matrix
-    C_self = cost_fn(state.positions, state.positions, preconditioner=preconditioner)
+    # 2a. Self-cost matrix (same whiten gating as cross)
+    C_self = cost_fn(
+        state.positions, state.positions,
+        preconditioner=preconditioner if whiten else None,
+    )
     C_self, cost_scale_self = normalize_cost(C_self, config.cost_normalize)
 
     # 2b. Uniform marginals for self-coupling
@@ -331,8 +347,8 @@ def step(
     # ===================================================================
     new_positions = state.positions + sdd_eta * (y_cross - x_bar_self)
 
-    # --- Preconditioner update ---
-    if config.precondition:
+    # --- Preconditioner update (when either precondition or whiten) ---
+    if config.needs_precond_accum or whiten:
         new_precond = update_preconditioner(
             state.precond_accum, scores, beta=config.precond_beta,
         )
@@ -346,7 +362,7 @@ def step(
         dual_g_cross=dual_g_cross,
         dual_f_self=dual_f_self,
         dual_g_self=dual_g_self,
-        dv_potential=jnp.zeros(N),  # placeholder — computed in Phase 4
+        dv_potential=dv_potential,
         precond_accum=new_precond,
         step=state.step + 1,
     )

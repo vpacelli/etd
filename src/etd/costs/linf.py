@@ -14,18 +14,27 @@ def linf_cost(
     positions: jnp.ndarray,   # (N, d)
     proposals: jnp.ndarray,   # (P, d)
     *,
-    preconditioner: jnp.ndarray = None,  # unused, kept for uniform interface
+    preconditioner: jnp.ndarray = None,  # (d,) optional whitening
 ) -> jnp.ndarray:             # (N, P)
-    """L-infinity cost.
+    """L-infinity cost, optionally in whitened coordinates.
+
+    When *preconditioner* is provided, computes max_k |Δ_k / P_k|
+    where Δ_k = x_ik - y_jk.
 
     Args:
         positions: Particle positions, shape ``(N, d)``.
         proposals: Proposal positions, shape ``(P, d)``.
-        preconditioner: Unused.  Accepted for interface uniformity.
+        preconditioner: Diagonal preconditioner P = 1/sqrt(G + δ),
+            shape ``(d,)``.  When provided, coordinates are whitened.
 
     Returns:
         Cost matrix, shape ``(N, P)``.  Non-negative.
     """
+    if preconditioner is not None:
+        inv_P = 1.0 / preconditioner   # (d,)
+        positions = positions * inv_P   # (N, d)
+        proposals = proposals * inv_P   # (P, d)
+
     # (N, 1, d) - (1, P, d) -> (N, P, d) -> max over d -> (N, P)
     diff = jnp.abs(positions[:, None, :] - proposals[None, :, :])
     return jnp.max(diff, axis=-1)

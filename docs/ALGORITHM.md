@@ -348,16 +348,32 @@ where $s_i = \nabla \log \pi(x_i)$ and $\beta = 0.9$. Initialize $G_0 = \mathbf{
 
 The inverse square root $P = 1/\sqrt{G_t + \delta}$ is a $(d,)$ vector.
 
-### Usage
+### Usage: `precondition` vs `whiten`
 
-The preconditioner affects two things:
+The preconditioner $P$ has two independent uses, controlled by separate
+config flags:
 
-1. **Proposals:** Mean $x_i + \alpha \, P \odot s_i$, variance
-   $\text{diag}(2\alpha\rho \, P^2)$. Stretches proposals along
+1. **`precondition: true` → Proposals:** Mean $x_i + \alpha \, P \odot s_i$,
+   variance $\text{diag}(2\alpha\rho \, P^2)$. Stretches proposals along
    low-curvature directions.
-2. **Mahalanobis cost** (if enabled): $C_{ij} = (x_i - y_j)^\top \text{diag}(P)^{-2} (x_i - y_j) / 2$.
-   Makes the coupling sensitive to displacements along high-curvature
-   directions.
+2. **`whiten: true` → Cost whitening:** All cost functions compute
+   distances in whitened coordinates $\tilde{x} = P^{-1} x$, e.g.
+   $C_{ij} = \|\tilde{x}_i - \tilde{y}_j\|^2 / 2$ for Euclidean. Makes
+   the coupling sensitive to displacements along high-curvature directions.
+
+These axes are independent — you can whiten costs without preconditioning
+proposals and vice versa. The accumulator $G_t$ is maintained whenever
+**either** flag is true (`needs_precond_accum` property).
+
+| `precondition` | `whiten` | Accumulator | P → proposals | P → cost |
+|:-:|:-:|:-:|:-:|:-:|
+| F | F | No | No | No |
+| T | F | Yes | Yes | No |
+| F | T | Yes | No | Yes |
+| T | T | Yes | Yes | Yes |
+
+**Mahalanobis alias:** `cost: "mahalanobis"` is a deprecated alias for
+`cost: "euclidean"` with `whiten: true`. It emits a `FutureWarning`.
 
 The preconditioner lives in `ETDState.precond_accum` as a $(d,)$ array.
 Updated during proposal generation. No separate `Preconditioner` class.

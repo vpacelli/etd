@@ -9,6 +9,7 @@ Covers:
 """
 
 import functools
+import warnings
 
 import jax
 import jax.numpy as jnp
@@ -367,33 +368,75 @@ class TestDVFeedback:
 # ===========================================================================
 
 class TestIntegration:
-    def test_mahalanobis_requires_precondition(self):
-        """ETDConfig with cost='mahalanobis' and precondition=False should raise."""
+    def test_mahalanobis_alias_warns(self):
+        """cost='mahalanobis' emits FutureWarning and runs as euclidean+whiten."""
         target = SimpleGaussian(dim=3)
         config = ETDConfig(
             n_particles=10, n_proposals=5, n_iterations=1,
             cost="mahalanobis", coupling="balanced",
-            precondition=False, epsilon=0.5, alpha=0.05,
+            precondition=True, epsilon=0.5, alpha=0.05,
         )
         key = jax.random.PRNGKey(0)
         state = etd_init(key, target, config)
 
         k1, k2 = jax.random.split(key)
-        with pytest.raises(ValueError, match="Mahalanobis cost requires"):
-            etd_step(k2, state, target, config)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            new_state, info = etd_step(k2, state, target, config)
+            future_warnings = [x for x in w if issubclass(x.category, FutureWarning)]
+            assert len(future_warnings) >= 1
+            assert "deprecated" in str(future_warnings[0].message).lower()
 
-    @pytest.mark.parametrize("cost_name,precondition", [
-        ("euclidean", False),
-        ("mahalanobis", True),
-        ("linf", False),
+        assert new_state.positions.shape == (10, 3)
+        assert jnp.all(jnp.isfinite(new_state.positions))
+
+    def test_mahalanobis_alias_matches_euclidean_whiten(self, rng):
+        """cost='mahalanobis' should produce same result as euclidean+whiten."""
+        target = SimpleGaussian(dim=3)
+
+        config_maha = ETDConfig(
+            n_particles=10, n_proposals=5, n_iterations=1,
+            cost="mahalanobis", coupling="balanced",
+            precondition=True, epsilon=0.5, alpha=0.05,
+        )
+        config_whiten = ETDConfig(
+            n_particles=10, n_proposals=5, n_iterations=1,
+            cost="euclidean", coupling="balanced",
+            precondition=True, whiten=True,
+            epsilon=0.5, alpha=0.05,
+        )
+
+        k1, k2 = jax.random.split(rng)
+        state_maha = etd_init(k1, target, config_maha)
+        state_whiten = etd_init(k1, target, config_whiten)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", FutureWarning)
+            new_maha, _ = etd_step(k2, state_maha, target, config_maha)
+        new_whiten, _ = etd_step(k2, state_whiten, target, config_whiten)
+
+        np.testing.assert_allclose(
+            np.array(new_maha.positions),
+            np.array(new_whiten.positions),
+            atol=1e-5,
+        )
+
+    @pytest.mark.parametrize("cost_name,precondition,whiten", [
+        ("euclidean", False, False),
+        ("euclidean", True, True),   # whitened euclidean
+        ("linf", False, False),
+        ("linf", False, True),       # whitened linf
+        ("imq", False, False),
+        ("imq", False, True),        # whitened imq
     ])
-    def test_step_with_each_cost(self, rng, cost_name, precondition):
+    def test_step_with_each_cost(self, rng, cost_name, precondition, whiten):
         """Smoke test: one ETD step with each cost variant."""
         target = SimpleGaussian(dim=4)
         config = ETDConfig(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost=cost_name, coupling="balanced",
-            precondition=precondition,
+            cost_params=(("c", 1.0),) if cost_name == "imq" else (),
+            precondition=precondition, whiten=whiten,
             epsilon=0.5, alpha=0.05,
         )
 
@@ -597,3 +640,175 @@ class TestBuildCostFn:
         config = ETDConfig(cost=cost_name, cost_params=cost_params)
         assert config.cost == "imq"
         assert config.cost_params == (("c", 1.0),)
+
+
+# ===========================================================================
+# Whitened Cost Unit Tests
+# ===========================================================================
+
+class TestWhitenedLinfCost:
+    def test_whitened_known_value(self):
+        """Hand-computed whitened L∞: max_k |Δ_k / P_k|."""
+        x = jnp.array([[1.0, 2.0, 3.0]])   # (1, 3)
+        y = jnp.array([[4.0, 4.0, 7.0]])    # (1, 3)
+        P = jnp.array([1.0, 0.5, 2.0])      # preconditioner
+
+        # Δ = [3, 2, 4], 1/P = [1, 2, 0.5]
+        # whitened Δ = [3*1, 2*2, 4*0.5] = [3, 4, 2]
+        # max = 4.0
+        C = linf_cost(x, y, preconditioner=P)
+        np.testing.assert_allclose(float(C[0, 0]), 4.0, atol=1e-5)
+
+    def test_whitened_identity_matches_unwhitened(self, positions_proposals):
+        """P=ones → whitened L∞ == unwhitened L∞."""
+        positions, proposals = positions_proposals
+        P = jnp.ones(positions.shape[1])
+
+        C_whitened = linf_cost(positions, proposals, preconditioner=P)
+        C_plain = linf_cost(positions, proposals)
+
+        np.testing.assert_allclose(
+            np.array(C_whitened), np.array(C_plain), atol=1e-6,
+        )
+
+
+class TestWhitenedIMQCost:
+    def test_whitened_known_value(self):
+        """Hand-computed whitened IMQ: sqrt(c² + ||P⁻¹Δ||²) - c."""
+        x = jnp.array([[0.0, 0.0]])   # (1, 2)
+        y = jnp.array([[3.0, 4.0]])    # (1, 2)
+        P = jnp.array([0.5, 1.0])      # preconditioner
+
+        # 1/P = [2, 1], whitened: [6, 4], ||·||² = 52
+        # sqrt(1 + 52) - 1 = sqrt(53) - 1
+        C = imq_cost(x, y, preconditioner=P, c=1.0)
+        expected = jnp.sqrt(53.0) - 1.0
+        np.testing.assert_allclose(float(C[0, 0]), float(expected), atol=1e-5)
+
+    def test_whitened_identity_matches_unwhitened(self, positions_proposals):
+        """P=ones → whitened IMQ == unwhitened IMQ."""
+        positions, proposals = positions_proposals
+        P = jnp.ones(positions.shape[1])
+
+        C_whitened = imq_cost(positions, proposals, preconditioner=P, c=1.0)
+        C_plain = imq_cost(positions, proposals, c=1.0)
+
+        np.testing.assert_allclose(
+            np.array(C_whitened), np.array(C_plain), atol=1e-6,
+        )
+
+
+class TestWhitenedEuclideanCost:
+    def test_whitened_matches_mahalanobis(self, positions_proposals):
+        """Euclidean with preconditioner should match Mahalanobis exactly."""
+        positions, proposals = positions_proposals
+        P = jnp.array([0.5, 1.0, 2.0, 0.3, 1.5])
+
+        C_whitened = squared_euclidean_cost(
+            positions, proposals, preconditioner=P,
+        )
+        C_maha = mahalanobis_cost(positions, proposals, preconditioner=P)
+
+        np.testing.assert_allclose(
+            np.array(C_whitened), np.array(C_maha), rtol=1e-5,
+        )
+
+    def test_whitened_identity_matches_unwhitened(self, positions_proposals):
+        """P=ones → whitened euclidean == unwhitened euclidean."""
+        positions, proposals = positions_proposals
+        P = jnp.ones(positions.shape[1])
+
+        C_whitened = squared_euclidean_cost(
+            positions, proposals, preconditioner=P,
+        )
+        C_plain = squared_euclidean_cost(positions, proposals)
+
+        np.testing.assert_allclose(
+            np.array(C_whitened), np.array(C_plain), rtol=1e-5,
+        )
+
+
+# ===========================================================================
+# Whiten Config Integration Tests
+# ===========================================================================
+
+class TestWhitenConfig:
+    def test_needs_precond_accum(self):
+        """needs_precond_accum reflects precondition OR whiten."""
+        assert not ETDConfig().needs_precond_accum
+        assert ETDConfig(precondition=True).needs_precond_accum
+        assert ETDConfig(whiten=True).needs_precond_accum
+        assert ETDConfig(precondition=True, whiten=True).needs_precond_accum
+
+    def test_whiten_without_precondition(self, rng):
+        """whiten=True, precondition=False: accumulator updated, cost whitened."""
+        target = SimpleGaussian(dim=4)
+        config = ETDConfig(
+            n_particles=15, n_proposals=10, n_iterations=1,
+            cost="euclidean", coupling="balanced",
+            precondition=False, whiten=True,
+            epsilon=0.5, alpha=0.05,
+        )
+
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, info = etd_step(k2, state, target, config)
+
+        assert new_state.positions.shape == (15, 4)
+        assert jnp.all(jnp.isfinite(new_state.positions))
+        # Accumulator should have been updated from ones
+        assert not jnp.allclose(new_state.precond_accum, jnp.ones(4))
+
+    def test_precondition_without_whiten(self, rng):
+        """precondition=True, whiten=False: proposals preconditioned, cost isotropic."""
+        target = SimpleGaussian(dim=4)
+        config = ETDConfig(
+            n_particles=15, n_proposals=10, n_iterations=1,
+            cost="euclidean", coupling="balanced",
+            precondition=True, whiten=False,
+            epsilon=0.5, alpha=0.05,
+        )
+
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, info = etd_step(k2, state, target, config)
+
+        assert new_state.positions.shape == (15, 4)
+        assert jnp.all(jnp.isfinite(new_state.positions))
+        # Accumulator should have been updated
+        assert not jnp.allclose(new_state.precond_accum, jnp.ones(4))
+
+    def test_step_linf_whitened(self, rng):
+        """Smoke test: ETD step with L∞ + whiten + precondition."""
+        target = SimpleGaussian(dim=4)
+        config = ETDConfig(
+            n_particles=15, n_proposals=10, n_iterations=1,
+            cost="linf", coupling="balanced",
+            precondition=True, whiten=True,
+            epsilon=0.5, alpha=0.05,
+        )
+
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, info = etd_step(k2, state, target, config)
+
+        assert new_state.positions.shape == (15, 4)
+        assert jnp.all(jnp.isfinite(new_state.positions))
+
+    def test_step_imq_whitened(self, rng):
+        """Smoke test: ETD step with IMQ + whiten + precondition."""
+        target = SimpleGaussian(dim=4)
+        config = ETDConfig(
+            n_particles=15, n_proposals=10, n_iterations=1,
+            cost="imq", cost_params=(("c", 1.0),),
+            coupling="balanced",
+            precondition=True, whiten=True,
+            epsilon=0.5, alpha=0.05,
+        )
+
+        k1, k2 = jax.random.split(rng)
+        state = etd_init(k1, target, config)
+        new_state, info = etd_step(k2, state, target, config)
+
+        assert new_state.positions.shape == (15, 4)
+        assert jnp.all(jnp.isfinite(new_state.positions))
