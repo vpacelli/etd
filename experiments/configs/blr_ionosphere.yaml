@@ -36,25 +36,26 @@ experiment:
     #   epsilon: [0.1, 0.05, 0.01]
     #   alpha: 0.1
 
-    - label: "ETD-B-Maha"
-      cost: "mahalanobis"
-      coupling: "balanced"
-      precondition: true
-      use_score: true
-      n_proposals: 25
-      sinkhorn_tol: 1e-3
-      epsilon: 0.1
-      alpha: 0.1
-      step_size: 0.5
+    # - label: "ETD-B-Maha"
+    #   cost: "mahalanobis"
+    #   coupling: "balanced"
+    #   precondition: true
+    #   use_score: true
+    #   n_proposals: 25
+    #   sinkhorn_tol: 1e-3
+    #   epsilon: 0.1
+    #   alpha: 0.1
+    #   step_size: 0.5
 
     # - label: "ETD-B-Linf"
     - label: ETD-B
       cost: "linf"
       coupling: "balanced"
       use_score: true
-      precondition: false
+      precondition: [true, false]
       n_proposals: 25
       sinkhorn_tol: 1e-3
+      whiten: [true, false]
       epsilon: 0.1
       alpha: 0.1
       step_size: 0.5
