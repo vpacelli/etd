@@ -55,7 +55,7 @@ experiment:
       sinkhorn_tol: 1e-5
       epsilon: 0.1
       alpha: 0.1
-      step_size: [0.1, 0.25, 0.5, 0.75, 0.9, 1.0]
+      step_size: 0.5
 
     # - label: "ETD-B-IMQ"
     #   cost:
