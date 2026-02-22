@@ -4,6 +4,7 @@ import functools
 
 from etd.costs.euclidean import squared_euclidean_cost
 from etd.costs.imq import imq_cost
+from etd.costs.langevin import langevin_residual_cost
 from etd.costs.linf import linf_cost
 from etd.costs.mahalanobis import mahalanobis_cost
 from etd.costs.normalize import mean_normalize, median_normalize, normalize_cost
@@ -13,6 +14,7 @@ COSTS = {
     "mahalanobis": mahalanobis_cost,
     "linf": linf_cost,
     "imq": imq_cost,
+    "langevin": langevin_residual_cost,
 }
 
 
@@ -55,6 +57,7 @@ __all__ = [
     "mahalanobis_cost",
     "linf_cost",
     "imq_cost",
+    "langevin_residual_cost",
     "mean_normalize",
     "median_normalize",
     "normalize_cost",

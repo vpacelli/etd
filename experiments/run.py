@@ -449,6 +449,16 @@ def build_algo_config(
         if schedules:
             kwargs["schedules"] = tuple(schedules)
 
+        # Langevin cost FDR defaults: α = ε, σ = √(2ε) unless overridden.
+        if kwargs.get("cost") == "langevin":
+            # Scores are required for Langevin cost.
+            kwargs.setdefault("use_score", True)
+            # FDR on by default (σ = √(2α)).
+            kwargs.setdefault("fdr", True)
+            # Default α = ε (consistent Langevin discretization).
+            if "alpha" not in entry:
+                kwargs["alpha"] = kwargs.get("epsilon", 0.1)
+
         # Resolve nested config objects (dict → frozen dataclass)
         _resolve_preconditioner_config(kwargs)
         _resolve_mutation_config(kwargs)

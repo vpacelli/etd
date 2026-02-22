@@ -23,6 +23,7 @@ import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 
 from etd.costs import build_cost_fn, normalize_cost
+from etd.costs.langevin import langevin_residual_cost
 from etd.coupling import sinkhorn_log_domain
 from etd.primitives.mutation import mutate
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
@@ -372,21 +373,30 @@ def step(
         log_b = log_b - logsumexp(log_b)
 
     # 1d. Cost matrix (cross)
-    cost_fn = build_cost_fn(cost_name, config.cost_params)
-    if cholesky_for_cost is not None:
-        C_cross = cost_fn(
-            state.positions, proposals, cholesky_factor=cholesky_for_cost,
-        )
-    elif diag_for_cost is not None:
-        C_cross = cost_fn(
-            state.positions, proposals, preconditioner=diag_for_cost,
-        )
-    elif legacy_precond and whiten:
-        C_cross = cost_fn(
-            state.positions, proposals, preconditioner=preconditioner,
+    if cost_name == "langevin":
+        # Inline Langevin-residual cost (approach B) — cross-coupling only.
+        cost_whiten = dict(config.cost_params).get("whiten", False)
+        chol = cholesky_for_cost if cost_whiten else None
+        C_cross = langevin_residual_cost(
+            state.positions, proposals, scores, eps,
+            cholesky_factor=chol, whiten=cost_whiten,
         )
     else:
-        C_cross = cost_fn(state.positions, proposals)
+        cost_fn = build_cost_fn(cost_name, config.cost_params)
+        if cholesky_for_cost is not None:
+            C_cross = cost_fn(
+                state.positions, proposals, cholesky_factor=cholesky_for_cost,
+            )
+        elif diag_for_cost is not None:
+            C_cross = cost_fn(
+                state.positions, proposals, preconditioner=diag_for_cost,
+            )
+        elif legacy_precond and whiten:
+            C_cross = cost_fn(
+                state.positions, proposals, preconditioner=preconditioner,
+            )
+        else:
+            C_cross = cost_fn(state.positions, proposals)
     C_cross, cost_scale_cross = normalize_cost(C_cross, config.cost_normalize)
 
     # 1e. Source marginal (uniform)
@@ -426,21 +436,24 @@ def step(
     # 2. Self-coupling (N×N between particles)
     # ===================================================================
 
-    # 2a. Self-cost matrix (same whitening as cross)
+    # 2a. Self-cost matrix (Euclidean for self — Langevin has no self reference)
+    self_cost_name = "euclidean" if cost_name == "langevin" else cost_name
+    self_cost_params = () if cost_name == "langevin" else config.cost_params
+    self_cost_fn = build_cost_fn(self_cost_name, self_cost_params)
     if cholesky_for_cost is not None:
-        C_self = cost_fn(
+        C_self = self_cost_fn(
             state.positions, state.positions, cholesky_factor=cholesky_for_cost,
         )
     elif diag_for_cost is not None:
-        C_self = cost_fn(
+        C_self = self_cost_fn(
             state.positions, state.positions, preconditioner=diag_for_cost,
         )
     elif legacy_precond and whiten:
-        C_self = cost_fn(
+        C_self = self_cost_fn(
             state.positions, state.positions, preconditioner=preconditioner,
         )
     else:
-        C_self = cost_fn(state.positions, state.positions)
+        C_self = self_cost_fn(state.positions, state.positions)
     C_self, cost_scale_self = normalize_cost(C_self, config.cost_normalize)
 
     # 2b. Uniform marginals for self-coupling

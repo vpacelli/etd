@@ -131,6 +131,78 @@ dimensions (controlled by max rather than sum). The Gibbs kernel
 $\exp(-\|x-y\|_\infty / \varepsilon)$ produces softer, more informative
 couplings in high $d$.
 
+### Langevin-Residual (LRET)
+
+$$C_{ij} = \frac{\|y_j - x_i - \varepsilon\, s(x_i)\|^2}{4\varepsilon}$$
+
+where $s(x) = \nabla\log\pi(x)$.  Replaces the Brownian reference process
+with Langevin diffusion in the Schrödinger bridge formulation.  The cost
+measures *how far is $y_j$ from where Langevin would take $x_i$ in time
+$\varepsilon$?*
+
+**Why it matters:** Expanding the cost gives three terms:
+
+| Term | Role | Separability |
+|------|------|-------------|
+| $\|y - x\|^2 / 4\varepsilon$ | Geometric proximity (standard) | Non-separable |
+| $-\frac{1}{2} s(x)^\top(y - x)$ | Score-displacement coupling | **Non-separable** — survives in balanced OT |
+| $\frac{\varepsilon}{4}\|s(x)\|^2$ | Score magnitude (absorbed by source dual) | Separable in $x$ |
+
+The cross-term $-\frac{1}{2}s(x)^\top(y-x)$ is non-separable: it
+couples source and target positions through the score.  In balanced
+Sinkhorn, separable terms are absorbed by dual variables and become
+invisible to the coupling.  This cross-term survives and directly shapes
+which proposals each particle couples to — encoding target geometry into
+the transport plan.
+
+**Score-free degeneracy:** Setting $s = 0$ recovers the standard
+Euclidean cost $\|y-x\|^2/(4\varepsilon)$, making LRET a strict
+generalization of ETD.
+
+**Graceful degradation:** When the coupling flattens toward product
+measure (high $d$), LRET's default is independent Langevin dynamics,
+not importance sampling — a qualitatively better floor than standard ETD.
+
+**FDR coupling:** With LRET, $\varepsilon$ plays a dual role: Langevin
+step size in proposals AND SB temperature in the cost.  The default
+wiring sets $\alpha = \varepsilon$ (one fewer hyperparameter).
+
+**Whitened mode:** With a Cholesky preconditioner $L$:
+
+$$m_i = x_i + \varepsilon\, (LL^\top)\, s_i, \quad
+C_{ij} = \frac{\|L^{-1}(y_j - m_i)\|^2}{4\varepsilon}$$
+
+**YAML usage:**
+
+```yaml
+# Minimal LRET (FDR defaults: α = ε, σ = √(2ε))
+- label: "LRET-B"
+  cost: {type: langevin}
+  coupling: "balanced"
+  epsilon: 0.1
+
+# LRET with whitened cost
+- label: "LRET-B-W"
+  cost: {type: langevin, whiten: true}
+  coupling: "balanced"
+  epsilon: 0.1
+  preconditioner:
+    type: cholesky
+    proposals: true
+    cost: true
+
+# LRET with explicit alpha override
+- label: "LRET-B-Custom"
+  cost: {type: langevin}
+  coupling: "balanced"
+  epsilon: 0.1
+  alpha: 0.03
+```
+
+**SDD integration:** The Langevin cost applies to the cross-coupling
+only.  Self-coupling (particle→particle) uses Euclidean cost — there is
+no Langevin reference for self-transport.
+
 ### Cost Normalization
 
 After computing the raw cost matrix, normalize to a unit statistic so that

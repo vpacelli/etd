@@ -17,6 +17,7 @@ import jax.numpy as jnp
 from jax.scipy.special import logsumexp
 
 from etd.costs import build_cost_fn, normalize_cost
+from etd.costs.langevin import langevin_residual_cost
 from etd.coupling import gibbs_coupling, sinkhorn_log_domain, sinkhorn_unbalanced
 from etd.primitives.mutation import mutate
 from etd.proposals.langevin import (
@@ -235,24 +236,33 @@ def step(
         log_b = log_b - logsumexp(log_b)
 
     # --- 3. Cost matrix ---
-    cost_fn = build_cost_fn(cost_name, config.cost_params)
-    if cholesky_for_cost is not None:
-        C = cost_fn(
-            state.positions, proposals,
-            cholesky_factor=cholesky_for_cost,
-        )
-    elif diag_for_cost is not None:
-        C = cost_fn(
-            state.positions, proposals,
-            preconditioner=diag_for_cost,
-        )
-    elif legacy_precond and whiten:
-        C = cost_fn(
-            state.positions, proposals,
-            preconditioner=preconditioner,
+    if cost_name == "langevin":
+        # Inline Langevin-residual cost (approach B).
+        cost_whiten = dict(config.cost_params).get("whiten", False)
+        chol = cholesky_for_cost if cost_whiten else None
+        C = langevin_residual_cost(
+            state.positions, proposals, scores, eps,
+            cholesky_factor=chol, whiten=cost_whiten,
         )
     else:
-        C = cost_fn(state.positions, proposals)
+        cost_fn = build_cost_fn(cost_name, config.cost_params)
+        if cholesky_for_cost is not None:
+            C = cost_fn(
+                state.positions, proposals,
+                cholesky_factor=cholesky_for_cost,
+            )
+        elif diag_for_cost is not None:
+            C = cost_fn(
+                state.positions, proposals,
+                preconditioner=diag_for_cost,
+            )
+        elif legacy_precond and whiten:
+            C = cost_fn(
+                state.positions, proposals,
+                preconditioner=preconditioner,
+            )
+        else:
+            C = cost_fn(state.positions, proposals)
     # C shape: (N, N*M)
 
     # --- 4. Normalize cost ---
