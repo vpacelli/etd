@@ -15,7 +15,7 @@ where:
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, NamedTuple, Optional, Tuple
 
 import jax
@@ -26,7 +26,7 @@ from etd.costs import build_cost_fn, normalize_cost
 from etd.coupling import sinkhorn_log_domain
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.schedule import Schedule, resolve_param
-from etd.types import Target
+from etd.types import PreconditionerConfig, Target
 from etd.update import systematic_resample
 from etd.weights import importance_weights
 
@@ -48,6 +48,7 @@ class SDDState(NamedTuple):
         dual_g_self: Self-coupling target duals, shape ``(N,)``.
         dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
         precond_accum: RMSProp accumulator, shape ``(d,)``.
+        cholesky_factor: Lower-triangular Cholesky factor, shape ``(d, d)``.
         step: Iteration counter.
     """
 
@@ -58,6 +59,7 @@ class SDDState(NamedTuple):
     dual_g_self: jnp.ndarray     # (N,)
     dv_potential: jnp.ndarray    # (N,)
     precond_accum: jnp.ndarray   # (d,)
+    cholesky_factor: jnp.ndarray  # (d, d)
     step: int
 
 
@@ -99,6 +101,9 @@ class SDDConfig:
     sdd_step_size: float = 0.5   # eta for displacement
 
     # --- Preconditioner ---
+    preconditioner: PreconditionerConfig = field(
+        default_factory=PreconditionerConfig,
+    )
     precondition: bool = False
     whiten: bool = False
     precond_beta: float = 0.9
@@ -116,8 +121,8 @@ class SDDConfig:
 
     @property
     def needs_precond_accum(self) -> bool:
-        """Whether the RMSProp accumulator needs updating."""
-        return self.precondition or self.whiten
+        """Whether any preconditioner is active."""
+        return self.preconditioner.active or self.precondition or self.whiten
 
     @property
     def resolved_sigma(self) -> float:
@@ -166,6 +171,7 @@ def init(
         dual_g_self=jnp.zeros(N),
         dv_potential=jnp.zeros(N),
         precond_accum=jnp.ones(d),
+        cholesky_factor=jnp.eye(d),
         step=0,
     )
 
@@ -364,6 +370,7 @@ def step(
         dual_g_self=dual_g_self,
         dv_potential=dv_potential,
         precond_accum=new_precond,
+        cholesky_factor=state.cholesky_factor,
         step=state.step + 1,
     )
 

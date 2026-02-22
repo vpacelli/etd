@@ -6,7 +6,7 @@ algorithm. These are the foundational types that all other modules reference.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import NamedTuple, Protocol, runtime_checkable
 
 import jax.numpy as jnp
@@ -50,6 +50,85 @@ class Target(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# Preconditioner config — frozen dataclass (static arg for JIT)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PreconditionerConfig:
+    """Configuration for the preconditioner.
+
+    Selects between no preconditioner, diagonal RMSProp, or full-covariance
+    Cholesky.  Frozen so it can be embedded in ``ETDConfig`` as a static arg.
+
+    Attributes:
+        type: Preconditioner type: ``"none"``, ``"rmsprop"``, or ``"cholesky"``.
+        proposals: Apply preconditioner to proposal drift and noise.
+        cost: Apply preconditioner to cost matrix whitening.
+        source: Data source for covariance: ``"scores"`` or ``"positions"``.
+        use_unclipped_scores: Use raw (unclipped) scores when ``source="scores"``.
+        beta: RMSProp EMA decay for the diagonal accumulator.
+        delta: Regularization floor for diagonal ``P = 1/sqrt(G + delta)``.
+        shrinkage: Ledoit-Wolf shrinkage toward the diagonal (Cholesky only).
+        jitter: Diagonal jitter for positive-definiteness (Cholesky only).
+        ema_beta: EMA on covariance: 0.0 = fresh each step (Cholesky only).
+    """
+
+    type: str = "none"                # "none" | "rmsprop" | "cholesky"
+    proposals: bool = False           # apply to proposal drift + noise
+    cost: bool = False                # apply to cost matrix whitening
+    source: str = "scores"            # "scores" | "positions"
+    use_unclipped_scores: bool = False
+    # RMSProp
+    beta: float = 0.9
+    delta: float = 1e-8
+    # Cholesky
+    shrinkage: float = 0.1           # toward diagonal
+    jitter: float = 1e-6             # PD guarantee
+    ema_beta: float = 0.0            # 0.0 = fresh each step
+
+    @property
+    def active(self) -> bool:
+        """Whether any preconditioner is active."""
+        return self.type != "none"
+
+    @property
+    def is_cholesky(self) -> bool:
+        return self.type == "cholesky"
+
+    @property
+    def is_rmsprop(self) -> bool:
+        return self.type == "rmsprop"
+
+
+def make_preconditioner_config(
+    precondition: bool = False,
+    whiten: bool = False,
+    precond_beta: float = 0.9,
+    precond_delta: float = 1e-8,
+) -> PreconditionerConfig:
+    """Build a PreconditionerConfig from legacy flat fields.
+
+    Args:
+        precondition: Apply RMSProp to proposals.
+        whiten: Apply RMSProp to cost whitening.
+        precond_beta: RMSProp EMA decay.
+        precond_delta: RMSProp regularization.
+
+    Returns:
+        Equivalent :class:`PreconditionerConfig`.
+    """
+    if not precondition and not whiten:
+        return PreconditionerConfig()
+    return PreconditionerConfig(
+        type="rmsprop",
+        proposals=precondition,
+        cost=whiten,
+        beta=precond_beta,
+        delta=precond_delta,
+    )
+
+
+# ---------------------------------------------------------------------------
 # ETD state — a JAX-compatible NamedTuple (native pytree)
 # ---------------------------------------------------------------------------
 
@@ -70,6 +149,9 @@ class ETDState(NamedTuple):
         precond_accum: RMSProp-style accumulator for diagonal
             preconditioner, shape ``(d,)``.  Initialized to **ones**
             (it appears as a denominator via ``1 / sqrt(G + δ)``).
+        cholesky_factor: Lower-triangular Cholesky factor of the ensemble
+            covariance, shape ``(d, d)``.  Initialized to ``eye(d)``.
+            Only updated when ``preconditioner.type == "cholesky"``.
         step: Scalar iteration counter.
     """
 
@@ -78,6 +160,7 @@ class ETDState(NamedTuple):
     dual_g: jnp.ndarray         # (N*M,)
     dv_potential: jnp.ndarray   # (N,)
     precond_accum: jnp.ndarray  # (d,)
+    cholesky_factor: jnp.ndarray  # (d, d)
     step: int                   # scalar
 
 
@@ -123,6 +206,12 @@ class ETDConfig:
     step_size: float = 1.0      # damping in (0, 1]
 
     # --- Preconditioner ---
+    preconditioner: PreconditionerConfig = field(
+        default_factory=PreconditionerConfig,
+    )
+
+    # Legacy compat — populated by make_preconditioner_config() in the runner.
+    # Deprecated: use ``preconditioner`` instead.
     precondition: bool = False
     whiten: bool = False
     precond_beta: float = 0.9
@@ -137,12 +226,12 @@ class ETDConfig:
 
     @property
     def needs_precond_accum(self) -> bool:
-        """Whether the RMSProp accumulator needs updating.
+        """Whether any preconditioner is active.
 
-        True when either ``precondition`` (proposals use P) or ``whiten``
-        (costs use P) is enabled.
+        Returns True when the new ``preconditioner`` config is active
+        **or** the legacy ``precondition``/``whiten`` flags are set.
         """
-        return self.precondition or self.whiten
+        return self.preconditioner.active or self.precondition or self.whiten
 
     @property
     def resolved_sigma(self) -> float:

@@ -77,6 +77,7 @@ def init(
         dual_g=jnp.zeros(N * M),
         dv_potential=jnp.zeros(N),
         precond_accum=jnp.ones(d),
+        cholesky_factor=jnp.eye(d),
         step=0,
     )
 
@@ -258,6 +259,7 @@ def step(
         dual_g=dual_g,
         dv_potential=dv_potential,
         precond_accum=new_precond,
+        cholesky_factor=state.cholesky_factor,
         step=state.step + 1,
     )
 
