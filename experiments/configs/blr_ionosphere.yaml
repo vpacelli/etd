@@ -34,7 +34,7 @@ experiment:
       n_proposals: 25
       sinkhorn_tol: 1e-5
       epsilon: 0.1
-      alpha: 0.01
+      alpha: [0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
 
     - label: "ETD-B-Maha"
       cost: "mahalanobis"
@@ -44,7 +44,7 @@ experiment:
       n_proposals: 25
       sinkhorn_tol: 1e-5
       epsilon: 0.1
-      alpha: 0.01
+      alpha: [0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
 
     - label: "ETD-B-Linf"
       cost: "linf"
@@ -53,16 +53,16 @@ experiment:
       n_proposals: 25
       sinkhorn_tol: 1e-5
       epsilon: 0.1
-      alpha: 0.01
+      alpha: [0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
 
-    - label: "ETD-B-IMQ"
-      cost:
-        type: "imq"
-        c: 1.0
-      coupling: "balanced"
-      epsilon: 0.1
-      alpha: 0.01
-      n_proposals: 25
+    # - label: "ETD-B-IMQ"
+    #   cost:
+    #     type: "imq"
+    #     c: 1.0
+    #   coupling: "balanced"
+    #   epsilon: 0.1
+    #   alpha: 0.01
+    #   n_proposals: 25
 
     - label: "SVGD"
       type: "baseline"
