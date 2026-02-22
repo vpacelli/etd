@@ -56,7 +56,7 @@ experiment:
         type: "rmsprop"
         proposals: true
         cost: true
-        use_unclipped_scores: [true, false]
+        use_unclipped_scores: false
         beta: 0.9
         delta: 1e-8
       whiten: false
@@ -74,7 +74,8 @@ experiment:
         type: "cholesky"
         proposals: true
         cost: true
-        use_unclipped_scores: [true, false]
+        source: positions
+        # use_unclipped_scores: false
         beta: 0.9
         ema_beta: 0.9
         delta: 1e-8
@@ -94,11 +95,11 @@ experiment:
     #   alpha: 0.01
     #   n_proposals: 25
 
-    - label: "SVGD"
-      type: "baseline"
-      method: "svgd"
-      learning_rate: 0.01
-      score_clip: 5.0
+    # - label: "SVGD"
+    #   type: "baseline"
+    #   method: "svgd"
+    #   learning_rate: 0.01
+    #   score_clip: 5.0
 
     # - label: "ULA"
     #   type: "baseline"
@@ -106,9 +107,9 @@ experiment:
     #   step_size: 0.001
     #   score_clip: 5.0
 
-    - label: "MALA"
-      type: "baseline"
-      method: "mala"
-      step_size: 0.001
-      score_clip: 5.0
-      precondition: true
+    # - label: "MALA"
+    #   type: "baseline"
+    #   method: "mala"
+    #   step_size: 0.001
+    #   score_clip: 5.0
+    #   precondition: true
