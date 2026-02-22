@@ -10,6 +10,9 @@ accounts for the asymmetric proposal density.
 This eliminates ULA's O(h) discretization bias at the cost of
 occasional rejections.  An optional RMSProp preconditioner scales
 both drift and noise by P = 1/sqrt(G + delta).
+
+When ``use_cholesky=True``, a full Cholesky-preconditioned MALA is used
+instead, delegating to :func:`etd.primitives.mutation.mala_kernel`.
 """
 
 from dataclasses import dataclass
@@ -18,7 +21,10 @@ from typing import Dict, Optional, Tuple, NamedTuple
 import jax
 import jax.numpy as jnp
 
+from etd.primitives.mutation import mala_kernel
 from etd.proposals.langevin import clip_scores, update_preconditioner
+from etd.proposals.preconditioner import compute_ensemble_cholesky
+from etd.types import PreconditionerConfig
 
 
 # ---------------------------------------------------------------------------
@@ -37,6 +43,10 @@ class MALAConfig:
         precondition: Whether to apply diagonal preconditioner.
         precond_beta: EMA decay for RMSProp accumulator.
         precond_delta: Regularization for preconditioner.
+        use_cholesky: Whether to use full Cholesky preconditioning.
+        cholesky_shrinkage: Ledoit-Wolf shrinkage for Cholesky.
+        cholesky_jitter: Diagonal jitter for PD guarantee.
+        cholesky_ema_beta: EMA on covariance (0.0 = fresh each step).
     """
     n_particles: int = 100
     n_iterations: int = 500
@@ -45,6 +55,10 @@ class MALAConfig:
     precondition: bool = False
     precond_beta: float = 0.9
     precond_delta: float = 1e-8
+    use_cholesky: bool = False
+    cholesky_shrinkage: float = 0.1
+    cholesky_jitter: float = 1e-6
+    cholesky_ema_beta: float = 0.0
 
 
 class MALAState(NamedTuple):
@@ -55,12 +69,14 @@ class MALAState(NamedTuple):
         log_prob: Cached log pi(x) for each particle, shape ``(N,)``.
         scores: Cached clipped scores, shape ``(N, d)``.
         precond_accum: RMSProp accumulator, shape ``(d,)``.
+        cholesky_factor: Lower-triangular Cholesky factor, shape ``(d, d)``.
         step: Iteration counter.
     """
     positions: jnp.ndarray      # (N, d)
     log_prob: jnp.ndarray       # (N,)
     scores: jnp.ndarray         # (N, d)
     precond_accum: jnp.ndarray  # (d,)
+    cholesky_factor: jnp.ndarray  # (d, d)
     step: int                    # scalar
 
 
@@ -94,15 +110,30 @@ def init(
     else:
         positions = init_positions
 
+    d = positions.shape[-1]
     log_p = target.log_prob(positions)                         # (N,)
     scores = clip_scores(target.score(positions), config.score_clip)  # (N, d)
-    precond_accum = jnp.ones(positions.shape[-1])              # (d,)
+    precond_accum = jnp.ones(d)                                # (d,)
+
+    if config.use_cholesky:
+        _pc = PreconditionerConfig(
+            type="cholesky",
+            shrinkage=config.cholesky_shrinkage,
+            jitter=config.cholesky_jitter,
+            ema_beta=config.cholesky_ema_beta,
+        )
+        cholesky_factor = compute_ensemble_cholesky(
+            positions, jnp.eye(d), _pc,
+        )
+    else:
+        cholesky_factor = jnp.eye(d)
 
     return MALAState(
         positions=positions,
         log_prob=log_p,
         scores=scores,
         precond_accum=precond_accum,
+        cholesky_factor=cholesky_factor,
         step=0,
     )
 
@@ -120,6 +151,9 @@ def step(
     3. Accept / reject each particle independently (MH).
     4. Update preconditioner if enabled.
 
+    When ``config.use_cholesky`` is True, delegates to
+    :func:`mala_kernel` for the full Cholesky-preconditioned step.
+
     Args:
         key: JAX PRNG key (consumed; do not reuse).
         state: Current MALA state.
@@ -135,7 +169,40 @@ def step(
     log_pi_x = state.log_prob          # (N,)
     s_x = state.scores                 # (N, d)
 
-    # --- Preconditioner ---
+    if config.use_cholesky:
+        # --- Cholesky-preconditioned MALA via shared kernel ---
+        new_positions, new_log_prob, new_scores, accept_float = mala_kernel(
+            key, x, log_pi_x, s_x, target,
+            h=h, L=state.cholesky_factor, score_clip=config.score_clip,
+        )
+
+        # Update Cholesky from post-step positions
+        _pc = PreconditionerConfig(
+            type="cholesky",
+            shrinkage=config.cholesky_shrinkage,
+            jitter=config.cholesky_jitter,
+            ema_beta=config.cholesky_ema_beta,
+        )
+        new_cholesky = compute_ensemble_cholesky(
+            new_positions, state.cholesky_factor, _pc,
+        )
+
+        acceptance_rate = jnp.mean(accept_float)
+        score_norm = jnp.mean(jnp.linalg.norm(new_scores, axis=-1))
+
+        new_state = MALAState(
+            positions=new_positions,
+            log_prob=new_log_prob,
+            scores=new_scores,
+            precond_accum=state.precond_accum,
+            cholesky_factor=new_cholesky,
+            step=state.step + 1,
+        )
+        info = {"acceptance_rate": acceptance_rate, "score_norm": score_norm}
+        return new_state, info
+
+    # --- Diagonal path (existing implementation, unchanged) ---
+
     if config.precondition:
         P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)  # (d,)
     else:
@@ -198,6 +265,7 @@ def step(
         log_prob=new_log_prob,
         scores=new_scores,
         precond_accum=new_accum,
+        cholesky_factor=state.cholesky_factor,
         step=state.step + 1,
     )
     return new_state, info

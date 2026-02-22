@@ -322,3 +322,91 @@ class TestMALAvsULA:
             f"MALA var error ({mala_err:.3f}) not better than "
             f"ULA var error ({ula_err:.3f})"
         )
+
+
+# ---------------------------------------------------------------------------
+# Cholesky-preconditioned MALA
+# ---------------------------------------------------------------------------
+
+class TestCholesky:
+    """Tests for the Cholesky-preconditioned MALA path."""
+
+    def test_cholesky_init(self):
+        """use_cholesky=True → cholesky_factor is not identity."""
+        target = GaussianTarget(dim=4, condition_number=10.0)
+        key = jax.random.PRNGKey(50)
+        cfg = MALAConfig(n_particles=50, use_cholesky=True)
+        state = init(key, target, cfg)
+
+        assert state.cholesky_factor.shape == (4, 4)
+        # Should differ from identity due to ensemble covariance
+        assert not jnp.allclose(state.cholesky_factor, jnp.eye(4), atol=0.01)
+
+    def test_cholesky_step_shapes(self):
+        """After 1 step, all state fields have correct shapes."""
+        target = GaussianTarget(dim=4)
+        key = jax.random.PRNGKey(51)
+        cfg = MALAConfig(n_particles=30, use_cholesky=True)
+        k1, k2 = jax.random.split(key)
+        state = init(k1, target, cfg)
+        new_state, info = step(k2, state, target, cfg)
+
+        assert new_state.positions.shape == (30, 4)
+        assert new_state.log_prob.shape == (30,)
+        assert new_state.scores.shape == (30, 4)
+        assert new_state.cholesky_factor.shape == (4, 4)
+        assert "acceptance_rate" in info
+        assert "score_norm" in info
+
+    def test_cholesky_convergence(self):
+        """Cholesky MALA on anisotropic Gaussian(dim=4) converges."""
+        target = GaussianTarget(dim=4, condition_number=50.0)
+        key = jax.random.PRNGKey(52)
+        cfg = MALAConfig(
+            n_particles=100, n_iterations=500,
+            step_size=0.05, use_cholesky=True,
+        )
+        k_init, k_run = jax.random.split(key)
+        state = init(k_init, target, cfg)
+
+        for _ in range(500):
+            k_run, k_step = jax.random.split(k_run)
+            state, _ = step(k_step, state, target, cfg)
+
+        err = float(jnp.mean(jnp.abs(jnp.mean(state.positions, axis=0))))
+        assert err < 0.5, f"Cholesky MALA mean_error = {err:.4f} >= 0.5"
+
+    def test_cholesky_vs_diagonal(self):
+        """Cholesky MALA >= diagonal MALA on anisotropic target."""
+        target = GaussianTarget(dim=4, condition_number=100.0)
+        key = jax.random.PRNGKey(53)
+        n_steps = 300
+        N = 100
+
+        # Diagonal MALA
+        cfg_diag = MALAConfig(
+            n_particles=N, step_size=0.001, precondition=True,
+        )
+        k_init, k_run = jax.random.split(key)
+        state_diag = init(k_init, target, cfg_diag)
+        for _ in range(n_steps):
+            k_run, k_step = jax.random.split(k_run)
+            state_diag, _ = step(k_step, state_diag, target, cfg_diag)
+        err_diag = float(jnp.mean(jnp.abs(jnp.mean(state_diag.positions, axis=0))))
+
+        # Cholesky MALA
+        cfg_chol = MALAConfig(
+            n_particles=N, step_size=0.001, use_cholesky=True,
+        )
+        k_init, k_run = jax.random.split(key)
+        state_chol = init(k_init, target, cfg_chol)
+        for _ in range(n_steps):
+            k_run, k_step = jax.random.split(k_run)
+            state_chol, _ = step(k_step, state_chol, target, cfg_chol)
+        err_chol = float(jnp.mean(jnp.abs(jnp.mean(state_chol.positions, axis=0))))
+
+        # Cholesky should be no worse (allowing some tolerance)
+        assert err_chol < err_diag + 0.5, (
+            f"Cholesky err ({err_chol:.3f}) much worse than "
+            f"diagonal err ({err_diag:.3f})"
+        )
