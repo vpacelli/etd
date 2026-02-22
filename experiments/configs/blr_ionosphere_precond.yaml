@@ -10,12 +10,12 @@ experiment:
 
   shared:
     n_particles: 100
-    n_iterations: 4000
+    n_iterations: 1000
     init:
       type: "gaussian"
       scale: 0.1
 
-  checkpoints: [0, 10, 50, 100, 250, 500, 1000, 2000, 4000]
+  checkpoints: [0, 10, 50, 100, 250, 500, 1000]
 
   metrics:
     - "sliced_wasserstein"
@@ -76,14 +76,14 @@ experiment:
         cost: true
         source: positions
         # use_unclipped_scores: false
-        beta: 0.9
-        ema_beta: 0.9
+        beta: 0.8
+        ema_beta: 0.0
         delta: 1e-8
       whiten: false
       n_proposals: 25
       sinkhorn_tol: 1e-3
       epsilon: 0.1
-      alpha: 0.1
+      alpha: [0.01, 0.05, 0.1, 0.5, 1.0]
       step_size: 0.5
 
     # - label: "ETD-B-IMQ"
