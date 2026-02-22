@@ -65,7 +65,7 @@ experiment:
       alpha: 0.1
       step_size: [0.1, 0.25, 0.5, 0.75, 1.0]
 
-    - label: ETD-B-RMS
+    - label: ETD-B-RMSc
       cost: "euclidean"
       coupling: "balanced"
       use_score: true
