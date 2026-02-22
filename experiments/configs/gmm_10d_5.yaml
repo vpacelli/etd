@@ -12,7 +12,7 @@ experiment:
       component_std: 1.0
 
   shared:
-    n_particles: 200
+    n_particles: 100
     n_iterations: 500
     init:
       type: "gaussian"
@@ -29,40 +29,34 @@ experiment:
     - "sinkhorn_iters"
 
   algorithms:
-    - label: "ETD-B-Euc"
+    - label: "ETD-B"
       cost: "euclidean"
       coupling: "balanced"
-      n_proposals: 50
+      update: "categorical"
+      use_score: true
+      n_proposals: 25
       sinkhorn_tol: 1e-5
       epsilon: 0.1
-      alpha: 0.5
+      alpha: [0.01, 0.05, 0.1]
 
     - label: "ETD-B-Maha"
       cost: "mahalanobis"
       coupling: "balanced"
+      use_score: true
       precondition: true
-      n_proposals: 50
+      n_proposals: 25
       sinkhorn_tol: 1e-5
       epsilon: 0.1
-      alpha: 0.5
+      alpha: [0.01, 0.05, 0.1]
 
     - label: "ETD-B-Linf"
       cost: "linf"
       coupling: "balanced"
-      n_proposals: 50
+      use_score: true
+      n_proposals: 25
       sinkhorn_tol: 1e-5
       epsilon: 0.1
-      alpha: 1.0
-
-    - label: "ETD-B-DV"
-      cost: "euclidean"
-      coupling: "balanced"
-      dv_feedback: true
-      dv_weight: 1.0
-      n_proposals: 50
-      sinkhorn_tol: 1e-5
-      epsilon: 0.1
-      alpha: 0.5
+      alpha: [0.01, 0.05, 0.1]
 
     - label: "SVGD"
       type: "baseline"
