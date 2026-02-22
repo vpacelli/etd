@@ -266,7 +266,7 @@ class TestLoadConfig:
         cfg = load_config("experiments/configs/gmm_2d_4.yaml")
         assert cfg["experiment"]["name"] == "gmm-2d-4"
         assert len(cfg["experiment"]["seeds"]) == 5
-        assert len(cfg["experiment"]["algorithms"]) == 7
+        assert len(cfg["experiment"]["algorithms"]) == 8
 
 
 # ---------------------------------------------------------------------------

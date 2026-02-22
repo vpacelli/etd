@@ -47,7 +47,7 @@ from etd.diagnostics.metrics import (
 from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
 from etd.targets import get_target
-from etd.types import ETDConfig
+from etd.types import ETDConfig, PreconditionerConfig
 
 console = Console()
 
@@ -294,6 +294,50 @@ def build_algo_label(base_label: str, entry: dict, original: dict) -> str:
 _ETD_META_KEYS = {"label", "type", "method"}
 
 
+def _resolve_preconditioner_config(kwargs: dict) -> dict:
+    """Resolve preconditioner config from YAML kwargs.
+
+    Handles two formats:
+
+    **New nested format** (preferred)::
+
+        preconditioner:
+          type: "cholesky"
+          proposals: true
+          cost: true
+          shrinkage: 0.1
+
+    **Legacy flat format** (backward compatible)::
+
+        precondition: true
+        whiten: true
+
+    When the new format is present, it is converted to a
+    :class:`PreconditionerConfig` instance and inserted into kwargs.
+    Legacy flat fields are left as-is for ETDConfig backward compat.
+
+    Args:
+        kwargs: Mutable dict of algorithm kwargs.
+
+    Returns:
+        The same dict (mutated in-place).
+    """
+    raw = kwargs.get("preconditioner")
+    if isinstance(raw, dict):
+        raw = dict(raw)  # copy to avoid mutating YAML entry
+        # Coerce types
+        _BOOL_KEYS = {"proposals", "cost", "use_unclipped_scores"}
+        _FLOAT_KEYS = {"beta", "delta", "shrinkage", "jitter", "ema_beta"}
+        for k in _BOOL_KEYS:
+            if k in raw:
+                raw[k] = bool(raw[k])
+        for k in _FLOAT_KEYS:
+            if k in raw:
+                raw[k] = float(raw[k])
+        kwargs["preconditioner"] = PreconditionerConfig(**raw)
+    return kwargs
+
+
 def build_algo_config(
     entry: dict,
     shared: dict,
@@ -367,6 +411,9 @@ def build_algo_config(
                 schedules.append((k, sched))
         if schedules:
             kwargs["schedules"] = tuple(schedules)
+
+        # Resolve nested preconditioner config (dict → PreconditionerConfig)
+        _resolve_preconditioner_config(kwargs)
 
         if is_sdd:
             from etd.extensions.sdd import SDDConfig

@@ -68,6 +68,20 @@ experiment:
       step_size: 0.01
       score_clip: 5.0
 
+    - label: "ETD-B-Chol"
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      use_score: true
+      epsilon: 0.1
+      alpha: 0.05
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        shrinkage: 0.1
+        jitter: 1e-6
+
     - label: "MPPI"
       type: "baseline"
       method: "mppi"
