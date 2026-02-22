@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from etd.primitives.mutation import mala_kernel, mutate, rwm_kernel
+from etd.extensions.sdd import SDDConfig, init as sdd_init, step as sdd_step
 from etd.step import init as etd_init, step as etd_step
 from etd.types import ETDConfig, MutationConfig
 from etd.targets.gaussian import GaussianTarget
@@ -361,6 +362,51 @@ class TestETDMutation:
         state, info = etd_step(k_step, state, target, cfg)
 
         # When mutation is off, log_prob and scores should be zeros
+        np.testing.assert_array_equal(np.array(state.log_prob), 0.0)
+        np.testing.assert_array_equal(np.array(state.scores), 0.0)
+        assert "mutation_acceptance_rate" not in info
+
+
+# ---------------------------------------------------------------------------
+# SDD step integration
+# ---------------------------------------------------------------------------
+
+class TestSDDMutation:
+    """SDD step with mutation enabled."""
+
+    def test_sdd_with_mala_mutation(self):
+        target = GaussianTarget(dim=2)
+        key = jax.random.PRNGKey(10)
+        mut = MutationConfig(kernel="mala", n_steps=3, step_size=0.01)
+        cfg = SDDConfig(
+            n_particles=30, n_iterations=10, n_proposals=10,
+            mutation=mut,
+        )
+        k_init, k_run = jax.random.split(key)
+        state = sdd_init(k_init, target, cfg)
+
+        for i in range(10):
+            k_run, k_step = jax.random.split(k_run)
+            state, info = sdd_step(k_step, state, target, cfg)
+
+        assert state.positions.shape == (30, 2)
+        assert state.log_prob.shape == (30,)
+        assert state.scores.shape == (30, 2)
+        assert jnp.all(jnp.isfinite(state.positions))
+        assert "mutation_acceptance_rate" in info
+
+    def test_sdd_mutation_off_noop(self):
+        """Default MutationConfig → log_prob/scores are zeros."""
+        target = GaussianTarget(dim=2)
+        key = jax.random.PRNGKey(11)
+        cfg = SDDConfig(
+            n_particles=30, n_iterations=10, n_proposals=10,
+        )
+        k_init, k_run = jax.random.split(key)
+        state = sdd_init(k_init, target, cfg)
+        k_run, k_step = jax.random.split(k_run)
+        state, info = sdd_step(k_step, state, target, cfg)
+
         np.testing.assert_array_equal(np.array(state.log_prob), 0.0)
         np.testing.assert_array_equal(np.array(state.scores), 0.0)
         assert "mutation_acceptance_rate" not in info

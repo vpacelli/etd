@@ -24,6 +24,7 @@ from jax.scipy.special import logsumexp
 
 from etd.costs import build_cost_fn, normalize_cost
 from etd.coupling import sinkhorn_log_domain
+from etd.primitives.mutation import mutate
 from etd.proposals.langevin import langevin_proposals, update_preconditioner
 from etd.proposals.preconditioner import (
     compute_ensemble_cholesky,
@@ -51,6 +52,10 @@ class SDDState(NamedTuple):
         dual_f_self: Self-coupling source duals, shape ``(N,)``.
         dual_g_self: Self-coupling target duals, shape ``(N,)``.
         dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
+        log_prob: Cached log π(x) from mutation, shape ``(N,)``.
+            Zeros when mutation is off.
+        scores: Cached clipped scores from mutation, shape ``(N, d)``.
+            Zeros when mutation is off or using RWM.
         precond_accum: RMSProp accumulator, shape ``(d,)``.
         cholesky_factor: Lower-triangular Cholesky factor, shape ``(d, d)``.
         step: Iteration counter.
@@ -62,6 +67,8 @@ class SDDState(NamedTuple):
     dual_f_self: jnp.ndarray     # (N,)
     dual_g_self: jnp.ndarray     # (N,)
     dv_potential: jnp.ndarray    # (N,)
+    log_prob: jnp.ndarray        # (N,)
+    scores: jnp.ndarray          # (N, d)
     precond_accum: jnp.ndarray   # (d,)
     cholesky_factor: jnp.ndarray  # (d, d)
     step: int
@@ -204,6 +211,13 @@ def init(
         cholesky_factor = compute_ensemble_cholesky(
             positions, jnp.eye(d), pc,
         )
+    elif config.needs_cholesky:
+        _auto_pc = PreconditionerConfig(
+            type="cholesky", shrinkage=0.1, jitter=1e-6,
+        )
+        cholesky_factor = compute_ensemble_cholesky(
+            positions, jnp.eye(d), _auto_pc,
+        )
     else:
         cholesky_factor = jnp.eye(d)
 
@@ -214,6 +228,8 @@ def init(
         dual_f_self=jnp.zeros(N),
         dual_g_self=jnp.zeros(N),
         dv_potential=jnp.zeros(N),
+        log_prob=jnp.zeros(N),
+        scores=jnp.zeros((N, d)),
         precond_accum=jnp.ones(d),
         cholesky_factor=cholesky_factor,
         step=0,
@@ -272,7 +288,7 @@ def step(
 
     N = config.n_particles
     pc = config.preconditioner
-    key_propose, key_resample = jax.random.split(key)
+    key_propose, key_resample, key_mutate = jax.random.split(key, 3)
 
     # --- Legacy preconditioner path ---
     preconditioner = None
@@ -453,18 +469,45 @@ def step(
     # ===================================================================
     new_positions = state.positions + sdd_eta * (y_cross - x_bar_self)
 
+    # --- MCMC Mutation (post-transport local refinement) ---
+    mut = config.mutation
+    if mut.active:
+        if mut.use_cholesky and not pc.is_cholesky:
+            _auto_pc = PreconditionerConfig(
+                type="cholesky", shrinkage=0.1, jitter=1e-6,
+            )
+            mut_cholesky = compute_ensemble_cholesky(
+                new_positions, state.cholesky_factor, _auto_pc,
+            )
+        elif mut.use_cholesky:
+            mut_cholesky = state.cholesky_factor
+        else:
+            mut_cholesky = None
+
+        mut_clip = mut.score_clip if mut.score_clip is not None else config.score_clip
+
+        new_positions, new_log_prob, new_scores, mut_info = mutate(
+            key_mutate, new_positions, target, mut,
+            cholesky_factor=mut_cholesky, score_clip=mut_clip,
+        )
+    else:
+        new_log_prob = jnp.zeros(N)
+        new_scores = jnp.zeros((N, target.dim))
+        mut_info = {}
+
     # --- Preconditioner update ---
+    # Use post-mutation positions so Cholesky reflects latest particle spread
     new_precond = state.precond_accum
     new_cholesky = state.cholesky_factor
 
     if pc.is_cholesky:
         if pc.source == "scores":
             if pc.use_unclipped_scores and config.use_score:
-                precond_data = target.score(state.positions)
+                precond_data = target.score(new_positions)
             else:
                 precond_data = scores
         else:
-            precond_data = state.positions
+            precond_data = new_positions
         new_cholesky = compute_ensemble_cholesky(
             precond_data, state.cholesky_factor, pc,
         )
@@ -485,6 +528,8 @@ def step(
         dual_f_self=dual_f_self,
         dual_g_self=dual_g_self,
         dv_potential=dv_potential,
+        log_prob=new_log_prob,
+        scores=new_scores,
         precond_accum=new_precond,
         cholesky_factor=new_cholesky,
         step=state.step + 1,
@@ -496,5 +541,7 @@ def step(
         "cost_scale_cross": cost_scale_cross,
         "cost_scale_self": cost_scale_self,
     }
+    if mut.active:
+        info["mutation_acceptance_rate"] = mut_info["acceptance_rate"]
 
     return new_state, info
