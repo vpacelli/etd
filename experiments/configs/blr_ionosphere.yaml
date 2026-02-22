@@ -105,21 +105,21 @@ experiment:
     #   alpha: 0.01
     #   n_proposals: 25
 
-    - label: "SVGD"
-      type: "baseline"
-      method: "svgd"
-      learning_rate: 0.01
-      score_clip: 5.0
-
-    # - label: "ULA"
+    # - label: "SVGD"
     #   type: "baseline"
-    #   method: "ula"
-    #   step_size: 0.001
+    #   method: "svgd"
+    #   learning_rate: 0.01
     #   score_clip: 5.0
 
-    - label: "MALA"
-      type: "baseline"
-      method: "mala"
-      step_size: 0.005
-      score_clip: 5.0
-      precondition: true
+    # # - label: "ULA"
+    # #   type: "baseline"
+    # #   method: "ula"
+    # #   step_size: 0.001
+    # #   score_clip: 5.0
+
+    # - label: "MALA"
+    #   type: "baseline"
+    #   method: "mala"
+    #   step_size: 0.005
+    #   score_clip: 5.0
+    #   precondition: true
