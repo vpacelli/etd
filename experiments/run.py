@@ -533,7 +533,11 @@ METRIC_DISPATCH = {
         sliced_wasserstein(p, ref, jax.random.key(0))
     ) if ref is not None else float("nan"),
     "mode_coverage": lambda p, t, ref: float(
-        mode_coverage(p, t.means, tolerance=2.0)
+        mode_coverage(
+            p, t.means,
+            tolerance=2.0 * getattr(t, "component_std", 1.0)
+            * jnp.sqrt(p.shape[1] / 2),
+        )
     ) if hasattr(t, "means") else float("nan"),
     "mean_error": lambda p, t, ref: float(mean_error(p, t.mean))
         if hasattr(t, "mean") else float("nan"),

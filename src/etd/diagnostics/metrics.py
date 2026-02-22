@@ -202,8 +202,11 @@ def mode_coverage(
     Args:
         particles: Particle positions, shape ``(N, d)``.
         mode_centers: Mode center positions, shape ``(K, d)``.
-        tolerance: Maximum distance threshold (default 2.0, i.e. 2 sigma
-            for unit-variance components).
+        tolerance: Maximum Euclidean distance threshold.  The default
+            2.0 is calibrated for **2-D** unit-variance components.
+            For higher dimensions, callers should scale as
+            ``2 * component_std * sqrt(d / 2)`` to maintain a constant
+            coverage probability (~86.5 %).
 
     Returns:
         Fraction of covered modes in [0, 1].
