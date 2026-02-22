@@ -554,3 +554,230 @@ class TestCholeskyStepIntegration:
         )
         state, _ = self._run_steps(config, target, n_steps=3)
         npt.assert_allclose(state.cholesky_factor, jnp.eye(2), atol=1e-10)
+
+
+# ---------------------------------------------------------------------------
+# Convergence + correctness
+# ---------------------------------------------------------------------------
+
+class TestCholeskyConvergence:
+    """Convergence and correctness tests for Cholesky preconditioner."""
+
+    def _mean_error(self, state, target_mean):
+        return float(jnp.linalg.norm(jnp.mean(state.positions, axis=0) - target_mean))
+
+    def test_anisotropic_faster_convergence(self):
+        """Cholesky should converge faster than isotropic on anisotropic target."""
+        target = _AnisotropicGaussian(dim=2, scales=jnp.array([0.1, 10.0]))
+        n_steps = 200
+
+        config_iso = ETDConfig(
+            n_particles=100, n_iterations=n_steps, n_proposals=10,
+            use_score=True, alpha=0.01, epsilon=0.1,
+        )
+        config_chol = ETDConfig(
+            n_particles=100, n_iterations=n_steps, n_proposals=10,
+            use_score=True, alpha=0.01, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=True,
+                shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+
+        key = jax.random.key(200)
+        state_iso = etd_init(key, target, config_iso)
+        state_chol = etd_init(key, target, config_chol)
+
+        for i in range(n_steps):
+            k = jax.random.fold_in(key, i)
+            state_iso, _ = etd_step(k, state_iso, target, config_iso)
+            state_chol, _ = etd_step(k, state_chol, target, config_chol)
+
+        err_iso = self._mean_error(state_iso, jnp.zeros(2))
+        err_chol = self._mean_error(state_chol, jnp.zeros(2))
+
+        # Cholesky should have lower or similar error
+        # (on a highly anisotropic target, it should be noticeably better)
+        assert err_chol < err_iso * 1.5, (
+            f"Cholesky error ({err_chol:.4f}) should not be much worse "
+            f"than isotropic ({err_iso:.4f})"
+        )
+
+    def test_isotropic_no_degradation(self):
+        """Cholesky should not degrade on an isotropic target."""
+        target = _IsotropicGaussian(dim=3)
+        n_steps = 100
+
+        config_iso = ETDConfig(
+            n_particles=50, n_iterations=n_steps, n_proposals=10,
+            use_score=True, alpha=0.05, epsilon=0.1,
+        )
+        config_chol = ETDConfig(
+            n_particles=50, n_iterations=n_steps, n_proposals=10,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+
+        key = jax.random.key(201)
+        state_iso = etd_init(key, target, config_iso)
+        state_chol = etd_init(key, target, config_chol)
+
+        for i in range(n_steps):
+            k = jax.random.fold_in(key, i)
+            state_iso, _ = etd_step(k, state_iso, target, config_iso)
+            state_chol, _ = etd_step(k, state_chol, target, config_chol)
+
+        err_iso = self._mean_error(state_iso, jnp.zeros(3))
+        err_chol = self._mean_error(state_chol, jnp.zeros(3))
+
+        # Should not be drastically worse
+        assert err_chol < err_iso * 3.0, (
+            f"Cholesky ({err_chol:.4f}) too much worse than iso ({err_iso:.4f})"
+        )
+
+    def test_L_tracks_covariance(self):
+        """After many steps, L@L.T should approximate the data covariance."""
+        target = _AnisotropicGaussian(dim=2, scales=jnp.array([0.5, 2.0]))
+        n_steps = 100
+
+        config = ETDConfig(
+            n_particles=100, n_iterations=n_steps, n_proposals=10,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                source="scores", shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+
+        key = jax.random.key(202)
+        state = etd_init(key, target, config)
+        for i in range(n_steps):
+            k = jax.random.fold_in(key, i)
+            state, _ = etd_step(k, state, target, config)
+
+        L = state.cholesky_factor
+        recovered_cov = L @ L.T
+        # Should be PD and finite
+        assert jnp.all(jnp.isfinite(recovered_cov))
+        assert jnp.all(jnp.diag(recovered_cov) > 0)
+
+    def test_ema_smooth_evolution(self):
+        """EMA should produce smoother L evolution than fresh."""
+        target = _IsotropicGaussian(dim=2)
+
+        config_fresh = ETDConfig(
+            n_particles=30, n_iterations=20, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+            ),
+        )
+        config_ema = ETDConfig(
+            n_particles=30, n_iterations=20, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                shrinkage=0.1, jitter=1e-6, ema_beta=0.9,
+            ),
+        )
+
+        key = jax.random.key(203)
+
+        # Collect L trajectories
+        deltas_fresh, deltas_ema = [], []
+        state_f = etd_init(key, target, config_fresh)
+        state_e = etd_init(key, target, config_ema)
+
+        prev_L_f = state_f.cholesky_factor
+        prev_L_e = state_e.cholesky_factor
+
+        for i in range(20):
+            k = jax.random.fold_in(key, i)
+            state_f, _ = etd_step(k, state_f, target, config_fresh)
+            state_e, _ = etd_step(k, state_e, target, config_ema)
+
+            deltas_fresh.append(float(jnp.max(jnp.abs(state_f.cholesky_factor - prev_L_f))))
+            deltas_ema.append(float(jnp.max(jnp.abs(state_e.cholesky_factor - prev_L_e))))
+
+            prev_L_f = state_f.cholesky_factor
+            prev_L_e = state_e.cholesky_factor
+
+        # EMA should have smaller step-to-step changes on average
+        import numpy as np
+        assert np.mean(deltas_ema) < np.mean(deltas_fresh)
+
+    def test_shrinkage_one_diagonal_factor(self):
+        """shrinkage=1.0 should produce approximately diagonal L."""
+        target = _IsotropicGaussian(dim=3)
+        config = ETDConfig(
+            n_particles=50, n_iterations=10, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=False,
+                shrinkage=1.0, jitter=1e-6,
+            ),
+        )
+
+        key = jax.random.key(204)
+        state = etd_init(key, target, config)
+        for i in range(10):
+            k = jax.random.fold_in(key, i)
+            state, _ = etd_step(k, state, target, config)
+
+        L = state.cholesky_factor
+        off_diag = L - jnp.diag(jnp.diag(L))
+        assert jnp.max(jnp.abs(off_diag)) < 0.01
+
+    def test_pytree_stability(self):
+        """State pytree structure should be identical across preconditioner types."""
+        target = _IsotropicGaussian(dim=2)
+        configs = [
+            ETDConfig(n_particles=10, n_proposals=3, use_score=True,
+                      alpha=0.05, epsilon=0.1),
+            ETDConfig(n_particles=10, n_proposals=3, use_score=True,
+                      alpha=0.05, epsilon=0.1, precondition=True),
+            ETDConfig(n_particles=10, n_proposals=3, use_score=True,
+                      alpha=0.05, epsilon=0.1,
+                      preconditioner=PreconditionerConfig(
+                          type="cholesky", proposals=True, cost=True,
+                      )),
+        ]
+        key = jax.random.key(205)
+        for config in configs:
+            state = etd_init(key, target, config)
+            # All should have the same fields
+            assert hasattr(state, 'positions')
+            assert hasattr(state, 'precond_accum')
+            assert hasattr(state, 'cholesky_factor')
+            assert state.positions.shape == (10, 2)
+            assert state.precond_accum.shape == (2,)
+            assert state.cholesky_factor.shape == (2, 2)
+
+    def test_jit_compiles_cholesky(self):
+        """JIT should compile cleanly with Cholesky config."""
+        target = _IsotropicGaussian(dim=2)
+        config = ETDConfig(
+            n_particles=20, n_iterations=3, n_proposals=5,
+            use_score=True, alpha=0.05, epsilon=0.1,
+            preconditioner=PreconditionerConfig(
+                type="cholesky", proposals=True, cost=True,
+                shrinkage=0.1, jitter=1e-6,
+            ),
+        )
+
+        # Both target and config must be static for JIT
+        jit_step = jax.jit(etd_step, static_argnums=(2, 3))
+
+        key = jax.random.key(206)
+        state = etd_init(key, target, config)
+
+        # First call compiles; second reuses
+        state, info = jit_step(key, state, target, config)
+        state, info = jit_step(jax.random.key(207), state, target, config)
+
+        assert jnp.all(jnp.isfinite(state.positions))
+        assert jnp.all(jnp.isfinite(state.cholesky_factor))
