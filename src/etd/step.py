@@ -79,13 +79,25 @@ def init(
     else:
         positions = init_positions
 
+    # Compute initial Cholesky factor from particle positions.
+    # Always use positions at init (not scores): particles start far from the
+    # target, so score covariance is unreliable.  The source setting governs
+    # updates during step().
+    pc = config.preconditioner
+    if pc.is_cholesky:
+        cholesky_factor = compute_ensemble_cholesky(
+            positions, jnp.eye(d), pc,
+        )
+    else:
+        cholesky_factor = jnp.eye(d)
+
     return ETDState(
         positions=positions,
         dual_f=jnp.zeros(N),
         dual_g=jnp.zeros(N * M),
         dv_potential=jnp.zeros(N),
         precond_accum=jnp.ones(d),
-        cholesky_factor=jnp.eye(d),
+        cholesky_factor=cholesky_factor,
         step=0,
     )
 

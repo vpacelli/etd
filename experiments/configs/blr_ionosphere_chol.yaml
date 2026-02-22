@@ -48,25 +48,7 @@ experiment:
     #   step_size: 0.5
 
     # - label: "ETD-B-Linf"
-    - label: ETD-B-RMS
-      cost: "euclidean"
-      coupling: "balanced"
-      use_score: true
-      preconditioner:
-        type: "rmsprop"
-        proposals: true
-        cost: true
-        use_unclipped_scores: false
-        beta: 0.9
-        delta: 1e-8
-      whiten: false
-      n_proposals: 25
-      sinkhorn_tol: 1e-3
-      epsilon: 0.1
-      alpha: 0.1
-      step_size: 0.5
-
-    - label: ETD-B-Cov
+    - label: ETD-B-Chol
       cost: "euclidean"
       coupling: "balanced"
       use_score: true
@@ -95,11 +77,11 @@ experiment:
     #   alpha: 0.01
     #   n_proposals: 25
 
-    # - label: "SVGD"
-    #   type: "baseline"
-    #   method: "svgd"
-    #   learning_rate: 0.01
-    #   score_clip: 5.0
+    - label: "SVGD"
+      type: "baseline"
+      method: "svgd"
+      learning_rate: 0.01
+      score_clip: 5.0
 
     # - label: "ULA"
     #   type: "baseline"

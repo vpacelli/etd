@@ -1,0 +1,115 @@
+experiment:
+  name: "blr-ionosphere"
+  seeds: [0, 1, 2, 3, 4]
+
+  target:
+    type: "blr"
+    params:
+      dataset: "ionosphere"
+      prior_std: 5.0
+
+  shared:
+    n_particles: 100
+    n_iterations: 1000
+    init:
+      type: "gaussian"
+      scale: 0.1
+
+  checkpoints: [0, 10, 50, 100, 250, 500, 1000]
+
+  metrics:
+    - "sliced_wasserstein"
+    - "mean_rmse"
+    - "variance_ratio_ref"
+    - "mean_error"
+    - "energy_distance"
+    - "sinkhorn_iters"
+
+  algorithms:
+    # - label: "ETD-B"
+    #   cost: "euclidean"
+    #   coupling: "balanced"
+    #   update: "categorical"
+    #   use_score: true
+    #   n_proposals: 25
+    #   sinkhorn_tol: 1e-5
+    #   epsilon: [0.1, 0.05, 0.01]
+    #   alpha: 0.1
+
+    # - label: "ETD-B-Maha"
+    #   cost: "mahalanobis"
+    #   coupling: "balanced"
+    #   precondition: true
+    #   use_score: true
+    #   n_proposals: 25
+    #   sinkhorn_tol: 1e-3
+    #   epsilon: 0.1
+    #   alpha: 0.1
+    #   step_size: 0.5
+
+    # - label: "ETD-B-Linf"
+    - label: ETD-B-RMS
+      cost: "euclidean"
+      coupling: "balanced"
+      use_score: true
+      preconditioner:
+        type: "rmsprop"
+        proposals: true
+        cost: true
+        use_unclipped_scores: false
+        beta: 0.9
+        delta: 1e-8
+      whiten: false
+      n_proposals: 25
+      sinkhorn_tol: 1e-3
+      epsilon: 0.1
+      alpha: [0.01, 0.05, 0.1, 0.5, 1.0]
+      step_size: 0.5
+
+    - label: ETD-B-Cov
+      cost: "euclidean"
+      coupling: "balanced"
+      use_score: true
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        source: positions
+        # use_unclipped_scores: false
+        beta: 0.8
+        ema_beta: 0.0
+        delta: 1e-8
+      whiten: false
+      n_proposals: 25
+      sinkhorn_tol: 1e-3
+      epsilon: 0.1
+      alpha: [0.01, 0.05, 0.1, 0.5, 1.0]
+      step_size: 0.5
+
+    # - label: "ETD-B-IMQ"
+    #   cost:
+    #     type: "imq"
+    #     c: 1.0
+    #   coupling: "balanced"
+    #   epsilon: 0.1
+    #   alpha: 0.01
+    #   n_proposals: 25
+
+    # - label: "SVGD"
+    #   type: "baseline"
+    #   method: "svgd"
+    #   learning_rate: 0.01
+    #   score_clip: 5.0
+
+    # - label: "ULA"
+    #   type: "baseline"
+    #   method: "ula"
+    #   step_size: 0.001
+    #   score_clip: 5.0
+
+    # - label: "MALA"
+    #   type: "baseline"
+    #   method: "mala"
+    #   step_size: 0.001
+    #   score_clip: 5.0
+    #   precondition: true

@@ -478,8 +478,8 @@ class TestCholeskyStepIntegration:
         assert state.positions.shape == (20, 2)
         assert jnp.all(jnp.isfinite(state.positions))
 
-    def test_cholesky_factor_updates(self):
-        """Cholesky factor should change from eye(d) after the first step."""
+    def test_cholesky_factor_initialized_from_data(self):
+        """Cholesky factor should be computed from init particles, not eye(d)."""
         target = _IsotropicGaussian(dim=3)
         config = ETDConfig(
             n_particles=30, n_iterations=5, n_proposals=5,
@@ -491,13 +491,21 @@ class TestCholeskyStepIntegration:
         )
         key = jax.random.key(101)
         state = etd_init(key, target, config)
-        # Initial cholesky_factor is eye(d)
-        npt.assert_allclose(state.cholesky_factor, jnp.eye(3), atol=1e-6)
-
-        state, _ = etd_step(key, state, target, config)
-        # After one step, should differ from eye(d)
+        # Initial cholesky_factor should already differ from eye(d)
         diff = jnp.max(jnp.abs(state.cholesky_factor - jnp.eye(3)))
-        assert diff > 1e-4, "Cholesky factor should have changed"
+        assert diff > 1e-4, "Cholesky factor should be initialized from data"
+        # Should be lower-triangular
+        npt.assert_allclose(
+            state.cholesky_factor,
+            jnp.tril(state.cholesky_factor),
+            atol=1e-7,
+        )
+
+        # After a step, should continue to update
+        L_init = state.cholesky_factor.copy()
+        state, _ = etd_step(key, state, target, config)
+        diff_post = jnp.max(jnp.abs(state.cholesky_factor - L_init))
+        assert diff_post > 1e-4, "Cholesky factor should update after step"
 
     def test_cholesky_higher_dim(self):
         """Cholesky should work for d=10."""
