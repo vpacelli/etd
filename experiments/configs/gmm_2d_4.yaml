@@ -62,6 +62,12 @@ experiment:
       step_size: 0.01
       score_clip: 5.0
 
+    - label: "MALA"
+      type: "baseline"
+      method: "mala"
+      step_size: 0.01
+      score_clip: 5.0
+
     - label: "MPPI"
       type: "baseline"
       method: "mppi"

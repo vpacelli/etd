@@ -1,4 +1,4 @@
-"""Tests for baseline inference algorithms (ULA, SVGD, MPPI).
+"""Tests for baseline inference algorithms (ULA, MALA, SVGD, MPPI).
 
 Covers init shapes, step shapes, determinism, convergence, registry,
 per-particle proposals (MPPI), and bandwidth options (SVGD).
@@ -12,6 +12,7 @@ import pytest
 from etd.baselines import (
     BASELINES,
     get_baseline,
+    MALAConfig, MALAState, mala_init, mala_step,
     MPPIConfig, MPPIState, mppi_init, mppi_step,
     SVGDConfig, SVGDState, svgd_init, svgd_step,
     ULAConfig, ULAState, ula_init, ula_step,
@@ -41,7 +42,7 @@ def key():
 class TestInit:
     """Each baseline: shapes correct, step counter = 0, all finite."""
 
-    @pytest.mark.parametrize("method", ["ula", "svgd", "mppi"])
+    @pytest.mark.parametrize("method", ["ula", "mala", "svgd", "mppi"])
     def test_shapes_and_step(self, method, gaussian_target, key):
         bl = get_baseline(method)
         cfg = bl["config"](n_particles=50)
@@ -59,7 +60,7 @@ class TestInit:
         np.testing.assert_array_equal(np.array(state.adam_m), 0.0)
         np.testing.assert_array_equal(np.array(state.adam_v), 0.0)
 
-    @pytest.mark.parametrize("method", ["ula", "svgd", "mppi"])
+    @pytest.mark.parametrize("method", ["ula", "mala", "svgd", "mppi"])
     def test_custom_positions(self, method, gaussian_target, key):
         """Explicit init_positions should be used verbatim."""
         bl = get_baseline(method)
@@ -154,7 +155,7 @@ class TestRegistry:
         with pytest.raises(KeyError, match="Unknown baseline"):
             get_baseline("nonexistent")
 
-    @pytest.mark.parametrize("method", ["svgd", "ula", "mppi"])
+    @pytest.mark.parametrize("method", ["svgd", "ula", "mala", "mppi"])
     def test_get_baseline_returns_dict(self, method):
         bl = get_baseline(method)
         assert "config" in bl
@@ -162,7 +163,7 @@ class TestRegistry:
         assert "step" in bl
 
     def test_baselines_count(self):
-        assert len(BASELINES) == 3
+        assert len(BASELINES) == 4
 
 
 # ---------------------------------------------------------------------------
