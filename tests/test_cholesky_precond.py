@@ -16,6 +16,9 @@ from etd.proposals.preconditioner import (
     update_rmsprop_accum,
 )
 from etd.types import PreconditionerConfig
+from etd.costs.euclidean import squared_euclidean_cost
+from etd.costs.imq import imq_cost
+from etd.costs.linf import linf_cost
 from etd.weights import _log_proposal_density, importance_weights
 
 
@@ -336,3 +339,80 @@ class TestCholeskyISDensity:
         from jax.scipy.special import logsumexp
         npt.assert_allclose(logsumexp(log_b), 0.0, atol=1e-5)
         assert jnp.all(jnp.isfinite(log_b))
+
+
+# ---------------------------------------------------------------------------
+# Cholesky cost whitening
+# ---------------------------------------------------------------------------
+
+class TestCholeskyCostWhitening:
+    """Tests for cost functions with cholesky_factor."""
+
+    def test_identity_L_matches_standard_euclidean(self):
+        """cholesky_factor=eye(d) should match standard Euclidean cost."""
+        key = jax.random.key(30)
+        N, d, P = 10, 3, 20
+        positions = jax.random.normal(key, (N, d))
+        proposals = jax.random.normal(jax.random.key(31), (P, d))
+
+        C_std = squared_euclidean_cost(positions, proposals)
+        C_chol = squared_euclidean_cost(
+            positions, proposals, cholesky_factor=jnp.eye(d),
+        )
+        npt.assert_allclose(C_chol, C_std, atol=1e-5)
+
+    def test_cholesky_overrides_preconditioner(self):
+        """When both are provided, cholesky_factor takes precedence."""
+        key = jax.random.key(32)
+        N, d, P = 10, 3, 20
+        positions = jax.random.normal(key, (N, d))
+        proposals = jax.random.normal(jax.random.key(33), (P, d))
+
+        L = 2.0 * jnp.eye(d)
+        P_diag = jnp.ones(d) * 0.5
+
+        C_chol_only = squared_euclidean_cost(
+            positions, proposals, cholesky_factor=L,
+        )
+        C_both = squared_euclidean_cost(
+            positions, proposals, preconditioner=P_diag, cholesky_factor=L,
+        )
+        npt.assert_allclose(C_both, C_chol_only, atol=1e-6)
+
+    def test_imq_identity_L_matches_standard(self):
+        """IMQ with L=I should match standard IMQ."""
+        key = jax.random.key(34)
+        N, d, P = 10, 3, 20
+        positions = jax.random.normal(key, (N, d))
+        proposals = jax.random.normal(jax.random.key(35), (P, d))
+
+        C_std = imq_cost(positions, proposals, c=1.0)
+        C_chol = imq_cost(
+            positions, proposals, cholesky_factor=jnp.eye(d), c=1.0,
+        )
+        npt.assert_allclose(C_chol, C_std, atol=1e-5)
+
+    def test_linf_identity_L_matches_standard(self):
+        """L-inf with L=I should match standard L-inf."""
+        key = jax.random.key(36)
+        N, d, P = 10, 3, 20
+        positions = jax.random.normal(key, (N, d))
+        proposals = jax.random.normal(jax.random.key(37), (P, d))
+
+        C_std = linf_cost(positions, proposals)
+        C_chol = linf_cost(
+            positions, proposals, cholesky_factor=jnp.eye(d),
+        )
+        npt.assert_allclose(C_chol, C_std, atol=1e-5)
+
+    def test_cost_non_negative(self):
+        """All costs should be non-negative with Cholesky whitening."""
+        key = jax.random.key(38)
+        N, d, P = 10, 3, 20
+        positions = jax.random.normal(key, (N, d))
+        proposals = jax.random.normal(jax.random.key(39), (P, d))
+        L = jnp.array([[1.0, 0.0, 0.0], [0.5, 1.0, 0.0], [0.0, 0.3, 1.0]])
+
+        for cost_fn in [squared_euclidean_cost, imq_cost, linf_cost]:
+            C = cost_fn(positions, proposals, cholesky_factor=L)
+            assert jnp.all(C >= 0), f"{cost_fn.__name__} produced negative cost"
