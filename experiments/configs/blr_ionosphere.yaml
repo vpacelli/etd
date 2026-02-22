@@ -52,6 +52,7 @@ experiment:
       cost: "linf"
       coupling: "balanced"
       use_score: true
+      precondition: [true, false]
       n_proposals: 25
       sinkhorn_tol: 1e-3
       epsilon: 0.1
