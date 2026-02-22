@@ -23,7 +23,7 @@ def barycentric_update(
     proposals: jnp.ndarray,        # (P, d)
     step_size: float = 1.0,
     positions: Optional[jnp.ndarray] = None,  # (N, d)
-) -> jnp.ndarray:                   # (N, d)
+) -> tuple:
     """Barycentric (weighted mean) update.
 
     For each particle *i*, computes the coupling-weighted mean of proposals:
@@ -48,7 +48,9 @@ def barycentric_update(
             ``step_size < 1.0``.
 
     Returns:
-        New particle positions, shape ``(N, d)``.
+        Tuple ``(new_positions, aux)`` where:
+        - ``new_positions``: shape ``(N, d)``
+        - ``aux``: dict with ``"weights"`` → row-normalized coupling ``(N, P)``
     """
     # Row-normalize to get conditional P(j|i)
     log_weights = log_gamma - logsumexp(log_gamma, axis=1, keepdims=True)  # (N, P)
@@ -59,6 +61,6 @@ def barycentric_update(
 
     # Apply step-size damping
     if step_size < 1.0:
-        return (1.0 - step_size) * positions + step_size * bary_mean
+        return (1.0 - step_size) * positions + step_size * bary_mean, {"weights": weights}
 
-    return bary_mean
+    return bary_mean, {"weights": weights}

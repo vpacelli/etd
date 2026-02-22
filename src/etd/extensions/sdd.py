@@ -263,7 +263,7 @@ def step(
     )
 
     # 1g. Resample: y_cross (one proposal per particle)
-    y_cross = systematic_resample(
+    y_cross, cross_aux = systematic_resample(
         key_resample,
         log_gamma_cross,
         proposals,

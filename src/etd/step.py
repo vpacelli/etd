@@ -190,7 +190,7 @@ def step(
 
     # --- 7. Update (dispatch by config.update) ---
     update_fn = get_update_fn(config.update)
-    new_positions = update_fn(
+    new_positions, update_aux = update_fn(
         key_update,
         log_gamma,
         proposals,

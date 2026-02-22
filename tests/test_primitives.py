@@ -234,7 +234,7 @@ class TestSystematicResample:
 
         for i in range(n_samples):
             k = jax.random.PRNGKey(i + 100)
-            new_pos = systematic_resample(k, log_gamma, proposals)
+            new_pos, aux = systematic_resample(k, log_gamma, proposals)
             # Identify which proposal was selected
             idx = int(jnp.argmax(new_pos[0]))
             counts[idx] += 1

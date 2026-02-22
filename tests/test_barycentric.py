@@ -20,7 +20,7 @@ class TestShapes:
         proposals = jax.random.normal(key, (P, d))
         positions = jnp.zeros((N, d))
 
-        result = barycentric_update(key, log_gamma, proposals, positions=positions)
+        result, aux = barycentric_update(key, log_gamma, proposals, positions=positions)
         assert result.shape == (N, d)
 
 
@@ -37,8 +37,8 @@ class TestCorrectness:
         proposals = jax.random.normal(jax.random.PRNGKey(1), (P, d))
         positions = jnp.ones((N, d)) * 100.0  # should be ignored
 
-        result = barycentric_update(key, log_gamma, proposals, step_size=1.0,
-                                     positions=positions)
+        result, aux = barycentric_update(key, log_gamma, proposals, step_size=1.0,
+                                        positions=positions)
 
         # Manual computation
         from jax.scipy.special import logsumexp
@@ -55,8 +55,8 @@ class TestCorrectness:
         proposals = jax.random.normal(key, (P, d))
         positions = jax.random.normal(jax.random.PRNGKey(1), (N, d))
 
-        result = barycentric_update(key, log_gamma, proposals, step_size=0.0,
-                                     positions=positions)
+        result, aux = barycentric_update(key, log_gamma, proposals, step_size=0.0,
+                                        positions=positions)
 
         np.testing.assert_allclose(result, positions, atol=1e-7)
 
@@ -68,7 +68,7 @@ class TestCorrectness:
         proposals = jax.random.normal(key, (P, d))
         positions = jnp.zeros((N, d))
 
-        result = barycentric_update(key, log_gamma, proposals, positions=positions)
+        result, aux = barycentric_update(key, log_gamma, proposals, positions=positions)
 
         expected_mean = jnp.mean(proposals, axis=0)
         for i in range(N):
@@ -81,10 +81,10 @@ class TestCorrectness:
         proposals = jnp.ones((P, d))
         positions = jnp.zeros((N, d))
 
-        r1 = barycentric_update(jax.random.PRNGKey(0), log_gamma, proposals,
-                                 positions=positions)
-        r2 = barycentric_update(jax.random.PRNGKey(999), log_gamma, proposals,
-                                 positions=positions)
+        r1, _ = barycentric_update(jax.random.PRNGKey(0), log_gamma, proposals,
+                                    positions=positions)
+        r2, _ = barycentric_update(jax.random.PRNGKey(999), log_gamma, proposals,
+                                    positions=positions)
 
         np.testing.assert_array_equal(r1, r2)
 
@@ -96,8 +96,8 @@ class TestCorrectness:
         proposals = jnp.ones((P, d)) * 4.0
         positions = jnp.zeros((N, d))
 
-        result = barycentric_update(key, log_gamma, proposals, step_size=0.5,
-                                     positions=positions)
+        result, aux = barycentric_update(key, log_gamma, proposals, step_size=0.5,
+                                        positions=positions)
 
         # Expected: 0.5 * 0 + 0.5 * 4 = 2
         np.testing.assert_allclose(result, 2.0, atol=1e-6)

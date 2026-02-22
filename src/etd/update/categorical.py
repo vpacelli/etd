@@ -18,7 +18,7 @@ def systematic_resample(
     proposals: jnp.ndarray,         # (P, d)
     step_size: float = 1.0,
     positions: Optional[jnp.ndarray] = None,   # (N, d) — needed for damping
-) -> jnp.ndarray:                    # (N, d)
+) -> tuple:
     """Resample proposals via systematic resampling.
 
     For each particle *i*, samples one proposal index from the
@@ -45,7 +45,9 @@ def systematic_resample(
             ``step_size < 1.0``.
 
     Returns:
-        New particle positions, shape ``(N, d)``.
+        Tuple ``(new_positions, aux)`` where:
+        - ``new_positions``: shape ``(N, d)``
+        - ``aux``: dict with ``"indices"`` → selected proposal indices ``(N,)``
     """
     N, P = log_gamma.shape
 
@@ -83,4 +85,4 @@ def systematic_resample(
         assert positions is not None, "positions required when step_size < 1.0"
         new_positions = (1.0 - step_size) * positions + step_size * new_positions
 
-    return new_positions
+    return new_positions, {"indices": indices}
