@@ -1,5 +1,5 @@
 experiment:
-  name: "blr-ionosphere"
+  name: "blr-ionosphere_rms"
   seeds: [0, 1, 2, 3, 4]
 
   target:
@@ -70,12 +70,12 @@ experiment:
       coupling: "balanced"
       use_score: true
       preconditioner:
-        type: "cholesky"
+        type: rmsprop
         proposals: true
         cost: true
-        source: positions
+        source: scores
         # use_unclipped_scores: false
-        beta: 0.8
+        beta: 0.9
         ema_beta: 0.0
         delta: 1e-8
       whiten: false

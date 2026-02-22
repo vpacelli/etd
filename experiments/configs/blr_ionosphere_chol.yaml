@@ -1,5 +1,5 @@
 experiment:
-  name: "blr-ionosphere"
+  name: "blr-ionosphere_chol"
   seeds: [0, 1, 2, 3, 4]
 
   target:
