@@ -1,11 +1,12 @@
 """Langevin-based proposal generation.
 
 Generates the pooled proposal set {y_j}_{j=1}^{N*M} via Langevin
-dynamics around current particle positions.  Three modes:
+dynamics around current particle positions.  Four modes:
 
 - **Score-guided** (default): y_ij = x_i + α·clip(∇logπ(x_i)) + σ·ξ
 - **Score-free**: y_ij = x_i + σ·ξ
-- **Preconditioned**: y_ij = x_i + α·P⊙s_i + σ·P⊙ξ
+- **Preconditioned (diagonal)**: y_ij = x_i + α·P⊙s_i + σ·P⊙ξ
+- **Preconditioned (Cholesky)**: y_ij = x_i + α·(LLᵀ)s_i + σ·Lξ
 """
 
 from typing import Tuple
@@ -81,6 +82,7 @@ def langevin_proposals(
     precondition: bool = False,
     precond_accum: jnp.ndarray | None = None,   # (d,)
     precond_delta: float = 1e-8,
+    cholesky_factor: jnp.ndarray | None = None,  # (d, d)
 ) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """Generate the pooled Langevin proposal set.
 
@@ -97,6 +99,10 @@ def langevin_proposals(
         precond_accum: RMSProp accumulator, shape ``(d,)``.  Required
             when ``precondition=True``.
         precond_delta: Regularization for preconditioner (default 1e-8).
+        cholesky_factor: Lower-triangular Cholesky factor ``L``,
+            shape ``(d, d)``.  When provided, overrides diagonal
+            preconditioner.  Drift uses ``Σ@s = (LLᵀ)s``, noise
+            uses ``σ·L·ξ``.
 
     Returns:
         Tuple ``(proposals, means, scores)`` where:
@@ -116,7 +122,13 @@ def langevin_proposals(
         scores = jnp.zeros_like(positions)             # (N, d)
 
     # --- Compute per-particle means ---
-    if precondition:
+    if cholesky_factor is not None:
+        # Cholesky: drift = x + α * (L @ L.T @ s)  =  x + α * Σ @ s
+        # scores: (N, d), L: (d, d)
+        # (L.T @ s.T): (d, N) → (L @ ...): (d, N) → transpose: (N, d)
+        LLt_scores = (cholesky_factor @ (cholesky_factor.T @ scores.T)).T  # (N, d)
+        means = positions + alpha * LLt_scores                              # (N, d)
+    elif precondition:
         assert precond_accum is not None, "precond_accum required when precondition=True"
         P = 1.0 / jnp.sqrt(precond_accum + precond_delta)   # (d,)
         means = positions + alpha * (P * scores)              # (N, d)
@@ -126,7 +138,11 @@ def langevin_proposals(
     # --- Sample noise ---
     noise = jax.random.normal(key, shape=(N, M, d))          # (N, M, d)
 
-    if precondition:
+    if cholesky_factor is not None:
+        # σ · L @ ξ: einsum over last axis
+        scaled_noise = jnp.einsum('ij,nmj->nmi', cholesky_factor, noise)  # (N, M, d)
+        proposals = means[:, None, :] + sigma * scaled_noise
+    elif precondition:
         # σ · P ⊙ ξ
         proposals = means[:, None, :] + sigma * P[None, None, :] * noise
     else:

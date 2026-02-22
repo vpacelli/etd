@@ -8,6 +8,7 @@ draft).
 from typing import Optional
 
 import jax.numpy as jnp
+from jax.scipy.linalg import solve_triangular
 from jax.scipy.special import logsumexp
 
 
@@ -16,6 +17,7 @@ def _log_proposal_density(
     means: jnp.ndarray,                            # (N, d)
     sigma: float,
     preconditioner: Optional[jnp.ndarray] = None,  # (d,)  P = 1/√(G+δ)
+    cholesky_factor: Optional[jnp.ndarray] = None,  # (d, d)
 ) -> jnp.ndarray:                                   # (P,)
     """Evaluate log q_μ(y) for the Gaussian mixture proposal.
 
@@ -23,7 +25,8 @@ def _log_proposal_density(
         q_\\mu(y) = \\frac{1}{N} \\sum_{i=1}^{N}
             \\mathcal{N}(y;\\, \\mu_i,\\, \\Sigma)
 
-    where Σ = σ²I (isotropic) or Σ = diag(σ² P²) (preconditioned).
+    where Σ = σ²I (isotropic), Σ = diag(σ² P²) (diagonal), or
+    Σ = σ² L Lᵀ (Cholesky).
 
     Args:
         proposals: Proposal positions, shape ``(P, d)``.
@@ -31,6 +34,8 @@ def _log_proposal_density(
         sigma: Noise scale.
         preconditioner: Diagonal preconditioner ``P = 1/√(G+δ)``,
             shape ``(d,)``.  If None, isotropic covariance is used.
+        cholesky_factor: Cholesky factor ``L``, shape ``(d, d)``.
+            When provided, overrides ``preconditioner``.
 
     Returns:
         Log mixture density at each proposal, shape ``(P,)``.
@@ -41,7 +46,25 @@ def _log_proposal_density(
     # --- Compute per-component Mahalanobis distances ---
     # Uses ||a-b||² = ||a||² + ||b||² - 2⟨a,b⟩ to avoid (P,N,d) intermediate.
     # Floors at zero to prevent negative values from float cancellation.
-    if preconditioner is not None:
+    if cholesky_factor is not None:
+        # Full covariance: Σ = σ² L Lᵀ
+        # Whiten: z = (σL)⁻¹ x, then Mahalanobis = ||z_y - z_μ||²
+        sigma_L = sigma * cholesky_factor                              # (d, d)
+        sigma_L_inv = solve_triangular(
+            sigma_L, jnp.eye(d), lower=True,
+        )                                                              # (d, d)
+        z_y = proposals @ sigma_L_inv.T                                # (P, d)
+        z_mu = means @ sigma_L_inv.T                                   # (N, d)
+        yy = jnp.sum(z_y ** 2, axis=1)                                # (P,)
+        mm = jnp.sum(z_mu ** 2, axis=1)                               # (N,)
+        ym = z_y @ z_mu.T                                             # (P, N)
+        maha_sq = jnp.maximum(yy[:, None] + mm[None, :] - 2.0 * ym, 0.0)
+        # Log-det: -½ (d log(2π) + 2 Σ_k log(|diag(σL)_k|))
+        log_det_term = -0.5 * (
+            d * jnp.log(2.0 * jnp.pi)
+            + 2.0 * jnp.sum(jnp.log(jnp.abs(jnp.diag(sigma_L))))
+        )
+    elif preconditioner is not None:
         # Preconditioned covariance: Σ = diag(σ² P²)
         # Pre-whiten: z = x / (σP), then Mahalanobis = ||z_y - z_μ||²
         inv_std = 1.0 / (sigma * preconditioner)                      # (d,)
@@ -78,6 +101,7 @@ def importance_weights(
     target: object,                                 # Target protocol
     sigma: float,
     preconditioner: Optional[jnp.ndarray] = None,  # (d,)
+    cholesky_factor: Optional[jnp.ndarray] = None,  # (d, d)
 ) -> jnp.ndarray:                                   # (P,)
     """Compute IS-corrected log target weights.
 
@@ -93,13 +117,16 @@ def importance_weights(
         target: Target distribution with ``log_prob(x)`` method.
         sigma: Proposal noise scale.
         preconditioner: Diagonal preconditioner, shape ``(d,)``.
+        cholesky_factor: Cholesky factor ``L``, shape ``(d, d)``.
 
     Returns:
         Normalized log weights, shape ``(P,)``.
         In log domain: ``logsumexp(result) ≈ 0``.
     """
     log_pi = target.log_prob(proposals)   # (P,)
-    log_q = _log_proposal_density(proposals, means, sigma, preconditioner)   # (P,)
+    log_q = _log_proposal_density(
+        proposals, means, sigma, preconditioner, cholesky_factor,
+    )   # (P,)
 
     log_b = log_pi - log_q
 
