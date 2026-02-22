@@ -57,7 +57,7 @@ experiment:
       n_proposals: 50
       sinkhorn_tol: 1e-3
       epsilon: 0.1
-      alpha: [0.05, 1.0]
+      alpha: 0.05
       step_size: 0.5
 
     # - label: "ETD-B-IMQ"
@@ -75,11 +75,11 @@ experiment:
       learning_rate: 0.01
       score_clip: 5.0
 
-    - label: "ULA"
-      type: "baseline"
-      method: "ula"
-      step_size: 0.001
-      score_clip: 5.0
+    # - label: "ULA"
+    #   type: "baseline"
+    #   method: "ula"
+    #   step_size: 0.001
+    #   score_clip: 5.0
 
     - label: "MALA"
       type: "baseline"
