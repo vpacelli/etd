@@ -321,15 +321,52 @@ $f(x) = \varepsilon\log\rho(x) - \psi(x)$, where $\psi$ is a softmin
 correction that is approximately constant at large $\varepsilon$ or high $d$.
 
 **Conceptually**, this is a cost augmentation: $C_{ij} \leftarrow C_{ij} + \lambda g_j$.
-**Implementationally**, it is equivalent and cleaner to add $-\lambda g_j$ to
+**Implementationally**, it is equivalent and cleaner to add $-\lambda \tilde{g}_j$ to
 the log target weights `log_b` before the coupling solve. This avoids
 polluting the median heuristic with non-geometric terms and keeps cost
 functions as pure geometry. The Sinkhorn solver sees identical log-domain
 arithmetic either way.
 
-With categorical resampling, dual potentials propagate for free: particle
-$i$ resampled to position $y_{j(i)}$ inherits $g_{j(i)}$ from the current
-solve. No interpolation, no c-transform, no staleness.
+### c-Transform (Double-Counting Fix)
+
+The raw Sinkhorn dual $g_j$ **cannot** be fed back directly. The g-update
+bakes in `log_b_j` (the IS-corrected target weights), so feeding raw $g$
+into `log_b` double-counts $\log\pi - \log q$. The fix is a
+coupling-dependent c-transform:
+
+- **Balanced**: $\tilde{g}_j = g_j - \varepsilon \cdot \log b_j$
+- **Unbalanced**: $\tilde{g}_j = g_j - \varepsilon \lambda \cdot \log b_j$, where $\lambda = \rho/(1+\rho)$
+- **Gibbs**: no iterative solver, $\tilde{g} = 0$ (no meaningful signal)
+
+The cleaned potential $\tilde{g}_j$ reflects pure geometry-weighted repulsion.
+
+### Per-Particle Potential and Interpolation
+
+After the coupling solve, each particle receives a scalar `dv_potential`
+that is carried to the next iteration:
+
+- **Categorical update**: $\text{dv}_i = \tilde{g}_{j(i)}$ (index into selected proposal)
+- **Barycentric update**: $\text{dv}_i = \sum_j w_{ij} \tilde{g}_j$ (weighted mean)
+
+When `step_size` $\eta < 1$, the particle moves only partway to its target.
+The carried potential interpolates source and target duals:
+
+$$\text{dv}_i = (1 - \eta) \, f_i + \eta \, \tilde{g}_{j(i)}$$
+
+At $\eta = 1$ (full step), this reduces to $\tilde{g}_{j(i)}$.
+
+### Warmup
+
+DV feedback is most effective after the coupling structure stabilizes
+(first ~50 iterations). Use a linear warmup schedule:
+
+```yaml
+dv_feedback: true
+dv_weight:
+  schedule: linear_warmup
+  value: 1.0
+  warmup: 50
+```
 
 Config: `dv_feedback: true`, `dv_weight: 1.0`. Off by default until
 validated experimentally.
