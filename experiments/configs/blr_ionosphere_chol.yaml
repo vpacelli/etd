@@ -24,6 +24,7 @@ experiment:
     - "mean_error"
     - "energy_distance"
     - "sinkhorn_iters"
+    - "coupling_ess"
 
   algorithms:
     # - label: "ETD-B"
@@ -49,7 +50,7 @@ experiment:
 
     # - label: "ETD-B-Linf"
     - label: ETD-B-Chol
-      cost: [euclidean, linf]
+      cost: euclidean
       coupling: "balanced"
       use_score: true
       preconditioner:
