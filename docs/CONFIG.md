@@ -69,13 +69,13 @@ experiment:
   #   type: "cholesky"         # "none" | "rmsprop" | "cholesky"
   #   proposals: true           # apply to proposal drift + noise
   #   cost: true                # apply to cost whitening
-  #   source: "scores"          # "scores" | "positions"
-  #   use_unclipped_scores: false
-  #   shrinkage: 0.1            # Cholesky: Ledoit-Wolf shrinkage
-  #   jitter: 1.0e-6            # Cholesky: diagonal jitter
-  #   ema_beta: 0.0             # Cholesky: EMA on covariance (0 = fresh)
-  #   beta: 0.9                 # RMSProp: EMA decay
-  #   delta: 1.0e-8             # RMSProp: epsilon
+  #   source: "scores"          # "scores" | "positions" (Cholesky only)
+  #   use_unclipped_scores: false  # raw scores for cov (Cholesky only)
+  #   shrinkage: 0.1            # Cholesky only: Ledoit-Wolf shrinkage
+  #   jitter: 1.0e-6            # Cholesky only: diagonal jitter
+  #   ema_beta: 0.0             # Cholesky only: EMA on covariance (0 = fresh)
+  #   beta: 0.9                 # RMSProp only: EMA decay
+  #   delta: 1.0e-8             # RMSProp only: epsilon
 
   # --- Legacy flat fields (backward-compatible) ---
   # precondition: false

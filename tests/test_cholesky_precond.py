@@ -55,6 +55,18 @@ class TestRMSPropCompat:
         P = compute_diagonal_P(accum, delta=0.0)
         npt.assert_allclose(P, jnp.array([1.0, 0.5, 1.0 / 3.0]), atol=1e-6)
 
+    def test_rmsprop_source_positions_warns(self):
+        """Setting source='positions' with type='rmsprop' emits a warning."""
+        with pytest.warns(UserWarning, match="source='positions' is ignored"):
+            PreconditionerConfig(type="rmsprop", proposals=True, source="positions")
+
+    def test_rmsprop_source_scores_no_warning(self):
+        """Default source='scores' with type='rmsprop' does not warn."""
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            PreconditionerConfig(type="rmsprop", proposals=True, source="scores")
+
 
 # ---------------------------------------------------------------------------
 # Cholesky computation

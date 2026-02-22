@@ -422,16 +422,21 @@ correlations.
 4. Optional EMA: $\Sigma_{\text{reg}} = \beta_{\text{ema}} \Sigma_{\text{prev}} + (1-\beta_{\text{ema}}) \Sigma_{\text{reg}}$
 5. Cholesky: $L = \text{chol}(\Sigma_{\text{reg}})$
 
-The `source` field controls what data the covariance is computed from:
+The `source` field controls what data the covariance is computed from
+(**Cholesky only** — RMSProp always uses scores):
 
 | `source` | Data | Captures |
 |----------|------|----------|
 | `"scores"` (default) | $\nabla \log \pi(x_i)$ | Target curvature |
 | `"positions"` | $x_i$ | Ensemble spread |
 
+Setting `source` to anything other than `"scores"` with `type="rmsprop"`
+emits a warning — RMSProp's accumulator $G_t = \mathbb{E}[s \odot s]$ is
+inherently a score statistic and computing it from positions is not meaningful.
+
 When `source="scores"`, the `use_unclipped_scores` flag controls whether
 raw or clipped scores are used (raw scores better capture the true Hessian
-structure but may be noisy on stiff targets).
+structure but may be noisy on stiff targets). This flag is also Cholesky-only.
 
 **EMA note:** EMA is applied on the *covariance matrix* before Cholesky
 factoring, not on $L$ directly. Direct EMA on $L$ does not preserve

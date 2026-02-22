@@ -6,6 +6,7 @@ algorithm. These are the foundational types that all other modules reference.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from typing import NamedTuple, Protocol, runtime_checkable
 
@@ -85,6 +86,16 @@ class PreconditionerConfig:
     shrinkage: float = 0.1           # toward diagonal
     jitter: float = 1e-6             # PD guarantee
     ema_beta: float = 0.0            # 0.0 = fresh each step
+
+    def __post_init__(self):
+        if self.is_rmsprop and self.source != "scores":
+            warnings.warn(
+                f"source={self.source!r} is ignored for type='rmsprop' "
+                "(RMSProp always uses scores). Set source='scores' to "
+                "silence this warning.",
+                UserWarning,
+                stacklevel=2,
+            )
 
     @property
     def active(self) -> bool:
