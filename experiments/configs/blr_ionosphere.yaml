@@ -60,6 +60,7 @@ experiment:
         ema_beta: 0.8
       n_proposals: 25
       sinkhorn_tol: [1e-5, 1e-4]
+      sinkhorn_max_iter: 200
       epsilon: 0.05
       alpha: 2.0
       step_size: 0.5
