@@ -14,6 +14,7 @@ where:
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Dict, NamedTuple, Optional, Tuple
 
@@ -45,6 +46,7 @@ class SDDState(NamedTuple):
         dual_g_cross: Cross-coupling target duals, shape ``(N*M,)``.
         dual_f_self: Self-coupling source duals, shape ``(N,)``.
         dual_g_self: Self-coupling target duals, shape ``(N,)``.
+        dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
         precond_accum: RMSProp accumulator, shape ``(d,)``.
         step: Iteration counter.
     """
@@ -54,6 +56,7 @@ class SDDState(NamedTuple):
     dual_g_cross: jnp.ndarray    # (N*M,)
     dual_f_self: jnp.ndarray     # (N,)
     dual_g_self: jnp.ndarray     # (N,)
+    dv_potential: jnp.ndarray    # (N,)
     precond_accum: jnp.ndarray   # (d,)
     step: int
 
@@ -97,6 +100,7 @@ class SDDConfig:
 
     # --- Preconditioner ---
     precondition: bool = False
+    whiten: bool = False
     precond_beta: float = 0.9
     precond_delta: float = 1e-8
 
@@ -109,6 +113,11 @@ class SDDConfig:
 
     # --- Schedules ---
     schedules: tuple = ()
+
+    @property
+    def needs_precond_accum(self) -> bool:
+        """Whether the RMSProp accumulator needs updating."""
+        return self.precondition or self.whiten
 
     @property
     def resolved_sigma(self) -> float:
@@ -155,6 +164,7 @@ def init(
         dual_g_cross=jnp.zeros(N * M),
         dual_f_self=jnp.zeros(N),
         dual_g_self=jnp.zeros(N),
+        dv_potential=jnp.zeros(N),
         precond_accum=jnp.ones(d),
         step=0,
     )
@@ -197,12 +207,25 @@ def step(
     Returns:
         Tuple ``(new_state, info)``.
     """
+    # --- Resolve cost name + whiten flag (mahalanobis alias) ---
+    cost_name = config.cost
+    whiten = config.whiten
+    if cost_name == "mahalanobis":
+        warnings.warn(
+            "cost='mahalanobis' is deprecated; use cost='euclidean' with "
+            "whiten=True instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        cost_name = "euclidean"
+        whiten = True
+
     N = config.n_particles
     key_propose, key_resample = jax.random.split(key)
 
-    # --- Preconditioner ---
+    # --- Preconditioner (needed when either precondition or whiten) ---
     preconditioner = None
-    if config.precondition:
+    if config.needs_precond_accum or whiten:
         P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)
         preconditioner = P
 
@@ -235,7 +258,7 @@ def step(
     log_b = importance_weights(
         proposals, means, target,
         sigma=sigma,
-        preconditioner=preconditioner,
+        preconditioner=preconditioner if config.precondition else None,
     )
 
     # 1c. DV feedback
@@ -244,9 +267,12 @@ def step(
         log_b = log_b - dv_weight * state.dual_g_cross
         log_b = log_b - logsumexp(log_b)
 
-    # 1d. Cost matrix (cross)
-    cost_fn = build_cost_fn(config.cost, config.cost_params)
-    C_cross = cost_fn(state.positions, proposals, preconditioner=preconditioner)
+    # 1d. Cost matrix (cross — whiten gates preconditioner)
+    cost_fn = build_cost_fn(cost_name, config.cost_params)
+    C_cross = cost_fn(
+        state.positions, proposals,
+        preconditioner=preconditioner if whiten else None,
+    )
     C_cross, cost_scale_cross = normalize_cost(C_cross, config.cost_normalize)
 
     # 1e. Source marginal (uniform)
@@ -320,6 +346,7 @@ def step(
         dual_g_cross=dual_g_cross,
         dual_f_self=dual_f_self,
         dual_g_self=dual_g_self,
+        dv_potential=jnp.zeros(N),  # placeholder — computed in Phase 4
         precond_accum=new_precond,
         step=state.step + 1,
     )

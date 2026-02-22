@@ -64,6 +64,9 @@ class ETDState(NamedTuple):
         dual_f: Source-side Sinkhorn dual potentials, shape ``(N,)``.
         dual_g: Target-side Sinkhorn dual potentials, shape ``(N*M,)``
             (global proposal pool).
+        dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
+            Clean c-transformed potential (without ``log_b`` contamination)
+            interpolated between source and target potentials.
         precond_accum: RMSProp-style accumulator for diagonal
             preconditioner, shape ``(d,)``.  Initialized to **ones**
             (it appears as a denominator via ``1 / sqrt(G + δ)``).
@@ -73,6 +76,7 @@ class ETDState(NamedTuple):
     positions: jnp.ndarray      # (N, d)
     dual_f: jnp.ndarray         # (N,)
     dual_g: jnp.ndarray         # (N*M,)
+    dv_potential: jnp.ndarray   # (N,)
     precond_accum: jnp.ndarray  # (d,)
     step: int                   # scalar
 
@@ -120,6 +124,7 @@ class ETDConfig:
 
     # --- Preconditioner ---
     precondition: bool = False
+    whiten: bool = False
     precond_beta: float = 0.9
     precond_delta: float = 1e-8
 
@@ -129,6 +134,15 @@ class ETDConfig:
 
     # --- Schedules ---
     schedules: tuple = ()  # (("dv_weight", Schedule(...)), ("epsilon", Schedule(...)), ...)
+
+    @property
+    def needs_precond_accum(self) -> bool:
+        """Whether the RMSProp accumulator needs updating.
+
+        True when either ``precondition`` (proposals use P) or ``whiten``
+        (costs use P) is enabled.
+        """
+        return self.precondition or self.whiten
 
     @property
     def resolved_sigma(self) -> float:

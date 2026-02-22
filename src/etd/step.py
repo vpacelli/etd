@@ -9,6 +9,7 @@ Both :func:`init` and :func:`step` are designed for use with
 ``jax.lax.scan`` or a simple Python loop.
 """
 
+import warnings
 from typing import Dict, Optional, Tuple
 
 import jax
@@ -74,6 +75,7 @@ def init(
         positions=positions,
         dual_f=jnp.zeros(N),
         dual_g=jnp.zeros(N * M),
+        dv_potential=jnp.zeros(N),
         precond_accum=jnp.ones(d),
         step=0,
     )
@@ -101,15 +103,25 @@ def step(
         - ``info``: Dict with diagnostic keys:
           ``"sinkhorn_iters"``, ``"cost_scale"``, ``"coupling_ess"``.
     """
-    if config.cost == "mahalanobis" and not config.precondition:
-        raise ValueError("Mahalanobis cost requires precondition=True")
+    # --- Resolve cost name + whiten flag (mahalanobis alias) ---
+    cost_name = config.cost
+    whiten = config.whiten
+    if cost_name == "mahalanobis":
+        warnings.warn(
+            "cost='mahalanobis' is deprecated; use cost='euclidean' with "
+            "whiten=True instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        cost_name = "euclidean"
+        whiten = True
 
     N = config.n_particles
     key_propose, key_update = jax.random.split(key)
 
-    # --- Preconditioner ---
+    # --- Preconditioner (needed when either precondition or whiten) ---
     preconditioner = None
-    if config.precondition:
+    if config.needs_precond_accum or whiten:
         P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)
         preconditioner = P
 
@@ -138,7 +150,7 @@ def step(
     log_b = importance_weights(
         proposals, means, target,
         sigma=sigma,
-        preconditioner=preconditioner,
+        preconditioner=preconditioner if config.precondition else None,
     )
 
     # --- 2b. DV feedback: augment target weights with dual potential ---
@@ -148,9 +160,12 @@ def step(
         log_b = log_b - dv_weight * state.dual_g
         log_b = log_b - logsumexp(log_b)
 
-    # --- 3. Cost matrix ---
-    cost_fn = build_cost_fn(config.cost, config.cost_params)
-    C = cost_fn(state.positions, proposals, preconditioner=preconditioner)  # (N, N*M)
+    # --- 3. Cost matrix (whiten gates preconditioner for cost only) ---
+    cost_fn = build_cost_fn(cost_name, config.cost_params)
+    C = cost_fn(
+        state.positions, proposals,
+        preconditioner=preconditioner if whiten else None,
+    )  # (N, N*M)
 
     # --- 4. Normalize cost ---
     C, cost_scale = normalize_cost(C, config.cost_normalize)
@@ -199,7 +214,8 @@ def step(
     )
 
     # --- 8. Preconditioner accumulator update ---
-    if config.precondition:
+    # Update when either precondition or whiten is active (or mahalanobis alias).
+    if config.needs_precond_accum or whiten:
         new_precond = update_preconditioner(
             state.precond_accum, scores, beta=config.precond_beta,
         )
@@ -211,6 +227,7 @@ def step(
         positions=new_positions,
         dual_f=dual_f,
         dual_g=dual_g,
+        dv_potential=jnp.zeros(N),  # placeholder — computed in Phase 3
         precond_accum=new_precond,
         step=state.step + 1,
     )
