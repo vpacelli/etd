@@ -59,12 +59,12 @@ experiment:
         source: positions
         ema_beta: 0.8
       n_proposals: 25
-      sinkhorn_tol: 1e-4
+      sinkhorn_tol: 1e-3
       epsilon: 0.05
       alpha: 2.0
       step_size: 0.5
 
-    - label: ETD-B-decay
+    - label: ETD-B-big
       cost: euclidean
       coupling: "balanced"
       use_score: true
@@ -75,9 +75,9 @@ experiment:
         source: positions
         ema_beta: 0.8
       n_proposals: 25
-      sinkhorn_tol: 1e-4
-      epsilon: {schedule: cosine_decay, value: 1.0, end: 0.05}
-      alpha: 2.0
+      sinkhorn_tol: 1e-3
+      epsilon: 0.05
+      alpha: 5.0
       step_size: 0.5
 
     # - label: ETD-Binf
@@ -120,6 +120,6 @@ experiment:
     - label: "MALA"
       type: "baseline"
       method: "mala"
-      step_size: 0.001
+      step_size: 0.005
       score_clip: 5.0
       precondition: true
