@@ -6,7 +6,7 @@ added after the original run.
 
 Usage:
     python -m experiments.show results/gmm-10d-5-cost-variants/2026-02-21_092309/
-    python -m experiments.show results/gmm-10d-5-cost-variants/2026-02-21_092309/ --metrics sliced_wasserstein mode_coverage
+    python -m experiments.show results/gmm-10d-5-cost-variants/2026-02-21_092309/ --metrics sliced_wasserstein mode_proximity
 """
 
 from __future__ import annotations
@@ -27,7 +27,8 @@ from rich.table import Table
 from etd.diagnostics.metrics import (
     energy_distance,
     mean_error,
-    mode_coverage,
+    mode_balance,
+    mode_proximity,
     sliced_wasserstein,
 )
 from etd.targets import get_target
@@ -46,8 +47,15 @@ METRIC_DISPATCH = {
     "sliced_wasserstein": lambda p, t, ref: float(
         sliced_wasserstein(p, ref, jax.random.key(0))
     ) if ref is not None else float("nan"),
-    "mode_coverage": lambda p, t, ref: float(
-        mode_coverage(p, t.means, tolerance=2.0)
+    "mode_proximity": lambda p, t, ref: float(
+        mode_proximity(
+            p, t.means,
+            component_std=getattr(t, "component_std", 1.0),
+            dim=p.shape[1],
+        )
+    ) if hasattr(t, "means") else float("nan"),
+    "mode_balance": lambda p, t, ref: float(
+        mode_balance(p, t.means)
     ) if hasattr(t, "means") else float("nan"),
     "mean_error": lambda p, t, ref: float(mean_error(p, t.mean))
     if hasattr(t, "mean") else float("nan"),

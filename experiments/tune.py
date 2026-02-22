@@ -52,8 +52,11 @@ console = Console()
 # Metric direction
 # ---------------------------------------------------------------------------
 
-LOWER_IS_BETTER = {"energy_distance", "sliced_wasserstein", "mean_error"}
-HIGHER_IS_BETTER = {"mode_coverage"}
+LOWER_IS_BETTER = {
+    "energy_distance", "sliced_wasserstein", "mean_error",
+    "mode_proximity", "mode_balance",
+}
+HIGHER_IS_BETTER = set()
 
 
 def _is_better(val: float, best: float, metric: str) -> bool:

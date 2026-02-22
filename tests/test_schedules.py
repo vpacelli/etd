@@ -302,13 +302,13 @@ class TestYAMLParsing:
 class TestDVWarmupValidation:
     """Validate that DV warmup stabilizes the 8-mode ring GMM."""
 
-    def test_dv_warmup_improves_mode_coverage(self):
-        """DV warmup on 8-mode ring GMM → better mode coverage than no warmup.
+    def test_dv_warmup_improves_mode_proximity(self):
+        """DV warmup on 8-mode ring GMM → better mode proximity than no warmup.
 
-        Runs multiple seeds and compares average mode coverage with warmup
-        vs. without warmup over 500 iterations.
+        Runs multiple seeds and compares average mode proximity with warmup
+        vs. without warmup over 500 iterations.  Lower proximity is better.
         """
-        from etd.diagnostics.metrics import mode_coverage
+        from etd.diagnostics.metrics import mode_proximity
 
         target = GMMTarget(
             dim=2, n_modes=8, arrangement="ring",
@@ -316,7 +316,7 @@ class TestDVWarmupValidation:
         )
 
         def run_seeds(config, seeds, n_iters):
-            coverages = []
+            proximities = []
             for seed in seeds:
                 key = jax.random.PRNGKey(seed)
                 k_init, k_run = jax.random.split(key)
@@ -325,9 +325,12 @@ class TestDVWarmupValidation:
                 for _ in range(n_iters):
                     k_run, k_step = jax.random.split(k_run)
                     state, _ = step(k_step, state, target, config)
-                cov = float(mode_coverage(state.positions, target.means, tolerance=2.0))
-                coverages.append(cov)
-            return coverages
+                prox = float(mode_proximity(
+                    state.positions, target.means,
+                    component_std=target.component_std, dim=target.dim,
+                ))
+                proximities.append(prox)
+            return proximities
 
         # Config WITHOUT warmup
         config_no_warmup = ETDConfig(
@@ -357,13 +360,13 @@ class TestDVWarmupValidation:
         seeds = [0, 1, 2, 3, 4]
         n_iters = 500
 
-        cov_no_warmup = run_seeds(config_no_warmup, seeds, n_iters)
-        cov_warmup = run_seeds(config_warmup, seeds, n_iters)
+        prox_no_warmup = run_seeds(config_no_warmup, seeds, n_iters)
+        prox_warmup = run_seeds(config_warmup, seeds, n_iters)
 
-        avg_no_warmup = np.mean(cov_no_warmup)
-        avg_warmup = np.mean(cov_warmup)
+        avg_no_warmup = np.mean(prox_no_warmup)
+        avg_warmup = np.mean(prox_warmup)
 
-        # Warmup should improve or match mode coverage on average
-        assert avg_warmup >= avg_no_warmup - 0.1, (
-            f"Warmup avg={avg_warmup:.2f} vs no-warmup avg={avg_no_warmup:.2f}"
+        # Warmup should improve (lower) or match mode proximity on average
+        assert avg_warmup <= avg_no_warmup + 0.1, (
+            f"Warmup avg={avg_warmup:.4f} vs no-warmup avg={avg_no_warmup:.4f}"
         )

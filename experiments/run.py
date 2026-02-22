@@ -41,8 +41,8 @@ from rich.table import Table
 
 from etd.baselines import BASELINES, get_baseline
 from etd.diagnostics.metrics import (
-    energy_distance, mean_error, mean_rmse, mode_coverage,
-    sliced_wasserstein, variance_ratio_vs_reference,
+    energy_distance, mean_error, mean_rmse, mode_balance,
+    mode_proximity, sliced_wasserstein, variance_ratio_vs_reference,
 )
 from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
@@ -532,12 +532,15 @@ METRIC_DISPATCH = {
     "sliced_wasserstein": lambda p, t, ref: float(
         sliced_wasserstein(p, ref, jax.random.key(0))
     ) if ref is not None else float("nan"),
-    "mode_coverage": lambda p, t, ref: float(
-        mode_coverage(
+    "mode_proximity": lambda p, t, ref: float(
+        mode_proximity(
             p, t.means,
-            tolerance=2.0 * getattr(t, "component_std", 1.0)
-            * jnp.sqrt(p.shape[1] / 2),
+            component_std=getattr(t, "component_std", 1.0),
+            dim=p.shape[1],
         )
+    ) if hasattr(t, "means") else float("nan"),
+    "mode_balance": lambda p, t, ref: float(
+        mode_balance(p, t.means)
     ) if hasattr(t, "means") else float("nan"),
     "mean_error": lambda p, t, ref: float(mean_error(p, t.mean))
         if hasattr(t, "mean") else float("nan"),

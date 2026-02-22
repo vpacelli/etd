@@ -143,18 +143,20 @@ class TestBuildConfig:
 
 class TestComputeMetrics:
     def test_gmm_metrics(self, gmm_target, ref_data):
-        """energy_distance and mode_coverage compute without error."""
+        """energy_distance, mode_proximity, mode_balance compute without error."""
         particles = gmm_target.sample(jax.random.PRNGKey(0), 100)
         result = compute_metrics(
             particles, gmm_target,
-            ["energy_distance", "mode_coverage", "mean_error"],
+            ["energy_distance", "mode_proximity", "mode_balance", "mean_error"],
             ref_data,
         )
         assert "energy_distance" in result
-        assert "mode_coverage" in result
+        assert "mode_proximity" in result
+        assert "mode_balance" in result
         assert "mean_error" in result
         assert not np.isnan(result["energy_distance"])
-        assert 0 <= result["mode_coverage"] <= 1
+        assert result["mode_proximity"] >= 0
+        assert 0 <= result["mode_balance"] <= np.log(2) + 1e-6
 
     def test_unknown_metric(self, gmm_target, ref_data):
         """Unknown metric → NaN."""
@@ -184,7 +186,7 @@ class TestRunSingle:
         m, p, wc = run_single(
             key, gmm_target, config, etd_init, etd_step, False,
             init_pos, 10, [5, 10],
-            ["energy_distance", "mode_coverage"], ref_data,
+            ["energy_distance", "mode_proximity"], ref_data,
         )
 
         assert 5 in m and 10 in m
@@ -225,7 +227,7 @@ class TestSaveLoad:
             all_metrics = {
                 0: {
                     "ETD-B": {
-                        100: {"energy_distance": 0.05, "mode_coverage": 1.0}
+                        100: {"energy_distance": 0.05, "mode_proximity": 1.0}
                     }
                 }
             }
@@ -247,7 +249,7 @@ class TestSaveLoad:
                 loaded = json.load(f)
 
             assert loaded["seed0"]["ETD-B"]["100"]["energy_distance"] == pytest.approx(0.05)
-            assert loaded["seed0"]["ETD-B"]["100"]["mode_coverage"] == pytest.approx(1.0)
+            assert loaded["seed0"]["ETD-B"]["100"]["mode_proximity"] == pytest.approx(1.0)
 
             # Check particles roundtrip
             particles = np.load(os.path.join(tmpdir, "particles.npz"))

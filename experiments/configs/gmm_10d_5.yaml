@@ -23,7 +23,8 @@ experiment:
   metrics:
     - "energy_distance"
     - "sliced_wasserstein"
-    - "mode_coverage"
+    - "mode_proximity"
+    - "mode_balance"
     - "mean_error"
     - "coupling_ess"
     - "sinkhorn_iters"

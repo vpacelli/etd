@@ -291,7 +291,8 @@ the config dataclass. The config is always a single point.
 metrics:
   # Synthetic targets (ground truth available)
   - "energy_distance"
-  - "mode_coverage"
+  - "mode_proximity"
+  - "mode_balance"
   - "sliced_w2"
   - "mean_error"
   - "cov_error"
@@ -349,7 +350,8 @@ experiment:
 
   metrics:
     - "energy_distance"
-    - "mode_coverage"
+    - "mode_proximity"
+  - "mode_balance"
     - "mean_error"
 
   algorithms:

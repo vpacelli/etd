@@ -146,7 +146,7 @@ def _gather_metric(metrics, metric_name):
 
 
 def make_convergence_figure(metrics):
-    """Energy distance and mode coverage vs iteration."""
+    """Energy distance and mode proximity vs iteration."""
     fig, (ax1, ax2) = plt.subplots(
         1, 2,
         figsize=(FULL_WIDTH, 2.2),
@@ -169,24 +169,17 @@ def make_convergence_figure(metrics):
     ax1.set_xticklabels([str(c) for c in CHECKPOINTS], fontsize=7)
     ax1.minorticks_off()
 
-    # --- Mode coverage ---
-    mc = _gather_metric(metrics, "mode_coverage")
+    # --- Mode proximity ---
+    mp = _gather_metric(metrics, "mode_proximity")
     for algo in ALGOS:
-        median, q25, q75 = mc[algo]
+        median, q25, q75 = mp[algo]
         color = ALGO_COLORS[algo]
         ax2.plot(iters, median, color=color, linewidth=1.2, label=algo)
-        ax2.fill_between(
-            iters,
-            np.clip(q25, 0, 1),
-            np.clip(q75, 0, 1),
-            color=color,
-            alpha=0.15,
-        )
+        ax2.fill_between(iters, q25, q75, color=color, alpha=0.15)
 
     ax2.set_xscale("log")
     ax2.set_xlabel("Iteration")
-    ax2.set_ylabel("Mode coverage")
-    ax2.set_ylim(-0.05, 1.08)
+    ax2.set_ylabel("Mode proximity")
     ax2.set_xticks(CHECKPOINTS)
     ax2.set_xticklabels([str(c) for c in CHECKPOINTS], fontsize=7)
     ax2.minorticks_off()

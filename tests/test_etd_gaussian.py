@@ -16,7 +16,7 @@ import pytest
 from etd.diagnostics.metrics import (
     energy_distance,
     mean_error,
-    mode_coverage,
+    mode_proximity,
     variance_ratio,
 )
 from etd.step import init, step
@@ -303,15 +303,15 @@ class TestMetrics:
         expected = jnp.sqrt(3.0) * 2.0  # ||[2,2,2]||
         np.testing.assert_allclose(float(err), float(expected), atol=1e-5)
 
-    def test_mode_coverage_partial(self):
-        """Mode coverage should detect partial coverage."""
-        # 2 of 4 modes have nearby particles
+    def test_mode_proximity_partial(self):
+        """Mode proximity distinguishes close vs distant modes."""
         modes = jnp.array([[0, 0], [10, 0], [0, 10], [10, 10]], dtype=jnp.float32)
         particles = jnp.array([
-            [0.1, 0.1],   # covers mode 0
-            [10.1, 0.1],  # covers mode 1
-            [5.0, 5.0],   # doesn't cover any mode
+            [0.1, 0.1],   # close to mode 0
+            [10.1, 0.1],  # close to mode 1
+            [5.0, 5.0],   # distant from modes 2 and 3
         ], dtype=jnp.float32)
 
-        cov = mode_coverage(particles, modes, tolerance=2.0)
-        assert float(cov) == pytest.approx(0.5, abs=0.01)
+        prox = mode_proximity(particles, modes, component_std=1.0, dim=2)
+        # Two modes covered well, two poorly — proximity should be non-trivial
+        assert float(prox) > 0.05

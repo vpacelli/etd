@@ -22,7 +22,8 @@ experiment:
 
   metrics:
     - "energy_distance"
-    - "mode_coverage"
+    - "mode_proximity"
+    - "mode_balance"
     - "mean_error"
 
   algorithms:

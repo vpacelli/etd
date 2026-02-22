@@ -190,31 +190,75 @@ def sliced_wasserstein(
     return jnp.sqrt(jnp.mean(w2_sq_per_slice))
 
 
-def mode_coverage(
+def mode_proximity(
     particles: jnp.ndarray,    # (N, d)
     mode_centers: jnp.ndarray, # (K, d)
-    tolerance: float = 2.0,
+    component_std: float = 1.0,
+    dim: int = 2,
 ) -> jnp.ndarray:               # scalar
-    """Fraction of modes with at least one nearby particle.
+    """Mean distance from each mode to its nearest particle, normalized.
 
-    A mode is "covered" if ``min_i ||x_i - mu_k|| < tolerance``.
+    Continuous replacement for binary mode coverage.  Normalized by
+    ``component_std * sqrt(dim)`` so the metric is dimensionless and
+    comparable across different dimensionalities.
+
+    .. math::
+        \\text{mode\\_proximity} = \\frac{1}{K} \\sum_k
+            \\frac{\\min_i \\|x_i - \\mu_k\\|}{\\sigma \\sqrt{d}}
 
     Args:
         particles: Particle positions, shape ``(N, d)``.
         mode_centers: Mode center positions, shape ``(K, d)``.
-        tolerance: Maximum Euclidean distance threshold.  The default
-            2.0 is calibrated for **2-D** unit-variance components.
-            For higher dimensions, callers should scale as
-            ``2 * component_std * sqrt(d / 2)`` to maintain a constant
-            coverage probability (~86.5 %).
+        component_std: Standard deviation of each mixture component.
+        dim: Dimensionality (used for normalization).
 
     Returns:
-        Fraction of covered modes in [0, 1].
+        Normalized mean nearest-particle distance (non-negative scalar).
+        Lower is better; 0 means every mode has a particle exactly on it.
     """
     dists = _pairwise_distances(mode_centers, particles)  # (K, N)
     min_dists = jnp.min(dists, axis=1)                     # (K,)
-    covered = min_dists < tolerance
-    return jnp.mean(covered.astype(jnp.float32))
+    scale = component_std * jnp.sqrt(jnp.float32(dim))
+    return jnp.mean(min_dists) / scale
+
+
+def mode_balance(
+    particles: jnp.ndarray,    # (N, d)
+    mode_centers: jnp.ndarray, # (K, d)
+) -> jnp.ndarray:               # scalar
+    """Jensen-Shannon divergence between hard mode shares and uniform.
+
+    Each particle is assigned to its nearest mode center.  The resulting
+    empirical shares ``s_k = (count at mode k) / N`` are compared to a
+    uniform distribution ``u_k = 1/K`` via JSD.
+
+    .. math::
+        \\text{mode\\_balance} = \\mathrm{JSD}(s \\| \\mathrm{Uniform}(1/K))
+
+    Args:
+        particles: Particle positions, shape ``(N, d)``.
+        mode_centers: Mode center positions, shape ``(K, d)``.
+
+    Returns:
+        JSD in ``[0, ln 2]``.  Lower is better; 0 means perfectly
+        balanced mode shares.
+    """
+    dists = _pairwise_distances(particles, mode_centers)   # (N, K)
+    assignments = jnp.argmin(dists, axis=1)                 # (N,)
+    K = mode_centers.shape[0]
+    N = particles.shape[0]
+
+    # Compute shares with a small floor to avoid log(0)
+    counts = jnp.zeros(K).at[assignments].add(1.0)         # (K,)
+    s = counts / N                                          # (K,)
+    u = jnp.ones(K) / K                                    # (K,)
+    m = 0.5 * (s + u)
+
+    # JSD = 0.5 * KL(s||m) + 0.5 * KL(u||m)
+    eps = 1e-12
+    kl_sm = jnp.sum(s * jnp.log(jnp.maximum(s, eps) / m))
+    kl_um = jnp.sum(u * jnp.log(u / m))
+    return 0.5 * kl_sm + 0.5 * kl_um
 
 
 def mean_error(

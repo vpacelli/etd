@@ -11,7 +11,7 @@ GMM contour.
 import jax
 import jax.numpy as jnp
 
-from etd.diagnostics.metrics import mode_coverage
+from etd.diagnostics.metrics import mode_proximity
 from etd.step import init, step
 from etd.targets.gmm import GMMTarget
 from etd.types import ETDConfig
@@ -53,11 +53,14 @@ def main():
         state, info = step(k_step, state, target, config)
 
         if i in checkpoints:
-            cov = mode_coverage(state.positions, target.means)
+            prox = mode_proximity(
+                state.positions, target.means,
+                component_std=target.component_std, dim=target.dim,
+            )
             print(
                 f"  iter {i:4d} | "
                 f"sinkhorn_iters={int(info['sinkhorn_iters']):3d} | "
-                f"mode_coverage={float(cov):.2f}"
+                f"mode_proximity={float(prox):.4f}"
             )
             snapshots[i] = state.positions.copy()
 
