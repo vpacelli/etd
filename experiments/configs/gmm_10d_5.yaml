@@ -1,5 +1,5 @@
 experiment:
-  name: "gmm-10d-5-cost-variants"
+  name: "gmm-10d-5"
   seeds: [0, 1, 2, 3, 4]
 
   target:
