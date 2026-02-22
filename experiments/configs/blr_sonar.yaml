@@ -19,11 +19,12 @@ experiment:
 
   metrics:
     - "sliced_wasserstein"
-    - "mean_rmse"
+    # - "mean_rmse"
     - "variance_ratio_ref"
-    - "mean_error"
+    # - "mean_error"
     - "energy_distance"
     - "sinkhorn_iters"
+    - "coupling_ess"
 
   algorithms:
     - label: ETD-B
