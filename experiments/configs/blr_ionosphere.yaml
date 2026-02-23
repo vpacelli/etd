@@ -63,6 +63,26 @@ experiment:
       alpha: 2.0
       step_size: 0.5
 
+    - label: ETD-B+MALA
+      cost: euclidean
+      coupling: balanced
+      update: categorical
+      use_score: true
+      epsilon: 0.05
+      alpha: [0.05, 0.1, 0.5, 1.0, 2.0]
+      n_proposals: 25
+      mutation:
+        kernel: mala
+        n_steps: [1, 5, 10]
+        step_size: [0.1, 0.01, 0.005]
+        use_cholesky: true
+      preconditioner:
+        type: cholesky
+        proposals: true
+        cost: true
+        source: particles
+        shrinkage: 0.1
+
     # - label: ETD-Binf
     #   cost: linf
     #   coupling: "balanced"

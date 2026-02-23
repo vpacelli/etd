@@ -1,6 +1,6 @@
 experiment:
   name: "gmm-2d-8"
-  seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  seeds: [0, 1, 2, 3, 4]
 
   target:
     type: "gmm"
@@ -21,47 +21,20 @@ experiment:
   checkpoints: [0, 1, 5, 10, 25, 50, 100, 200, 500]
 
   metrics:
+    - "sliced_wasserstein"
     - "energy_distance"
     - "mode_proximity"
     - "mode_balance"
     - "mean_error"
+    - "coupling_ess"
+    - "sinkhorn_iters"
 
   algorithms:
-    - label: "ETD-B"
-      cost: "euclidean"
-      coupling: "balanced"
-      update: "categorical"
-      use_score: true
-      n_proposals: 25
-      sinkhorn_tol: 1e-3
-      epsilon: 0.1
-      alpha: 0.05
-
-    - label: "ETD-B-Linf"
-      cost: "linf"
-      coupling: "balanced"
-      update: "categorical"
-      n_proposals: 25
-      sinkhorn_tol: 1e-3
-      epsilon: 0.1
-      alpha: 0.05
-
-    - label: "ETD-B-DV"
-      cost: "euclidean"
-      coupling: "balanced"
-      update: "categorical"
-      dv_feedback: true
-      dv_weight: {schedule: linear_warmup, value: 1.0, warmup: 200}
-      n_proposals: 25
-      sinkhorn_tol: 1e-3
-      epsilon: 0.1
-      alpha: 0.05
-
-    # - label: "ETD-B-Maha"
-    #   cost: "mahalanobis"
+    # - label: "ETD-B"
+    #   cost: "euclidean"
     #   coupling: "balanced"
-    #   precondition: true
-    #   n_proposals: 50
+    #   update: "categorical"
+    #   use_score: true
     #   epsilon: 0.1
     #   alpha: 0.05
 
@@ -87,11 +60,33 @@ experiment:
       learning_rate: 0.1
       score_clip: 5.0
 
-    - label: "ULA"
+    # - label: "ULA"
+    #   type: "baseline"
+    #   method: "ula"
+    #   step_size: 0.01
+    #   score_clip: 5.0
+
+    - label: "MALA"
       type: "baseline"
-      method: "ula"
+      method: "mala"
       step_size: 0.01
       score_clip: 5.0
+
+    - label: "ETD-B"
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      use_score: true
+      epsilon: 0.1
+      alpha: 0.05
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        source: positions
+        ema_beta: 0.8
+        shrinkage: 0.1
+        jitter: 1e-6
 
     - label: "MPPI"
       type: "baseline"
@@ -99,3 +94,64 @@ experiment:
       temperature: 1.0
       sigma: 0.316
       n_proposals: 25
+
+    # --- LRET: Langevin-adapted transport geometry ---
+    - label: "LRET-B"
+      cost: {type: "langevin"}
+      coupling: "balanced"
+      update: "categorical"
+      epsilon: 0.1
+      n_proposals: 25
+
+    - label: "LRET-B-W"
+      cost: 
+        type: "langevin"
+        whiten: true
+      coupling: "balanced"
+      update: "categorical"
+      epsilon: 0.1
+      n_proposals: 25
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        shrinkage: 0.1
+
+    # --- Mutation: MCMC rejuvenation after transport ---
+    - label: "ETD-B+MALA"
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      use_score: true
+      epsilon: 0.1
+      alpha: 0.05
+      n_proposals: 25
+      mutation:
+        kernel: "mala"
+        n_steps: 5
+        step_size: 0.1
+        use_cholesky: true
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        source: particles
+        shrinkage: 0.1
+
+    # --- Combined: LRET geometry + MALA mutation ---
+    # - label: "LRET-B+MALA"
+    #   cost: {type: "langevin", whiten: true}
+    #   coupling: "balanced"
+    #   update: "categorical"
+    #   epsilon: 0.1
+    #   n_proposals: 25
+    #   mutation:
+    #     kernel: "mala"
+    #     n_steps: 5
+    #     step_size: 0.05
+    #     use_cholesky: true
+    #   preconditioner:
+    #     type: "cholesky"
+    #     proposals: true
+    #     cost: true
+    #     shrinkage: 0.1
