@@ -56,6 +56,10 @@ def fmt_sigfig(x: float, n: int = 3) -> str:
     Returns:
         Formatted string.
     """
+    if not np.isfinite(x):
+        if np.isnan(x):
+            return "NaN"
+        return "inf" if x > 0 else "-inf"
     if x == 0:
         return "0"
     magnitude = floor(log10(abs(x)))
@@ -78,7 +82,9 @@ def fmt_mean_std(mean: float, std: float, sig: int = 3) -> str:
     """
     if np.isnan(mean):
         return "N/A"
-    if std == 0 or np.isnan(std):
+    if not np.isfinite(mean) or not np.isfinite(std):
+        return f"{fmt_sigfig(mean, sig)} \u00b1 {fmt_sigfig(std, sig)}"
+    if std == 0:
         return fmt_sigfig(mean, sig)
     # Scientific notation for very small values
     if abs(mean) < 0.001 and mean != 0:
