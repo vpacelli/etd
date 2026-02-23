@@ -27,13 +27,24 @@ experiment:
 
   algorithms:
     - label: "ETD-B"
-      cost: "euclidean"
-      coupling: "balanced"
-      update: "categorical"
-      epsilon: 0.1
+      cost: euclidean
+      coupling:
+        type: "balanced"
+        tolerance: 1e-3
+        iterations: 250
+        damping: 0.5
+      update: categorical
+      epsilon: 0.01
       proposal:
-        alpha: 0.05
+        alpha: 0.5
         clip_score: 5.0
+        count: 25      
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        source: positions
+        ema: 0.8
 
     - label: ETD-B
       sublabel: MALA
