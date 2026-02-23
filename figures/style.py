@@ -463,6 +463,52 @@ def resolve_algo_styles(algo_display_meta: list[dict]) -> dict[str, dict]:
     return result
 
 
+def format_iteration_axis(
+    ax: plt.Axes,
+    checkpoints: list | np.ndarray,
+    *,
+    axis: str = "x",
+) -> None:
+    """Format an iteration axis with log-scale and clean tick labels.
+
+    Replaces the categorical x-position pattern (``X_POS = arange(...)``)
+    with a proper log-scale axis using the actual checkpoint values.
+    Checkpoint 0 is mapped to 1 so log-scale works.
+
+    Args:
+        ax: Matplotlib axes.
+        checkpoints: Sorted list of iteration checkpoints (e.g., [0, 10, 50, ...]).
+        axis: ``"x"`` or ``"y"`` — which axis to format.
+    """
+    from matplotlib.ticker import ScalarFormatter
+
+    ckpts = np.asarray(checkpoints, dtype=float)
+    # Show at most ~6 ticks to avoid crowding
+    if len(ckpts) > 6:
+        step = max(1, len(ckpts) // 5)
+        idx = sorted(set(list(range(0, len(ckpts), step)) + [len(ckpts) - 1]))
+        tick_vals = ckpts[idx]
+    else:
+        tick_vals = ckpts
+
+    if axis == "x":
+        ax.set_xscale("log")
+        ax.set_xticks(tick_vals)
+        fmt = ScalarFormatter()
+        fmt.set_scientific(False)
+        ax.xaxis.set_major_formatter(fmt)
+        ax.xaxis.set_minor_formatter(plt.NullFormatter())
+        ax.tick_params(axis="x", which="minor", length=0)
+    else:
+        ax.set_yscale("log")
+        ax.set_yticks(tick_vals)
+        fmt = ScalarFormatter()
+        fmt.set_scientific(False)
+        ax.yaxis.set_major_formatter(fmt)
+        ax.yaxis.set_minor_formatter(plt.NullFormatter())
+        ax.tick_params(axis="y", which="minor", length=0)
+
+
 def load_display_metadata(results_dir: str) -> dict[str, dict]:
     """Load metadata.json from a results directory.
 
