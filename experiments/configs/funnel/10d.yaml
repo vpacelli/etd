@@ -18,8 +18,11 @@ experiment:
   checkpoints: [0, 1, 10, 50, 100, 200, 500]
 
   metrics:
+    - "sliced_wasserstein"
     - "energy_distance"
     - "mean_error"
+    - "coupling_ess"
+    - "sinkhorn_iters"
 
   algorithms:
     - label: "ETD-B"
