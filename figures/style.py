@@ -483,13 +483,14 @@ def format_iteration_axis(
     from matplotlib.ticker import ScalarFormatter
 
     ckpts = np.asarray(checkpoints, dtype=float)
-    # Show at most ~6 ticks to avoid crowding
-    if len(ckpts) > 6:
-        step = max(1, len(ckpts) // 5)
-        idx = sorted(set(list(range(0, len(ckpts), step)) + [len(ckpts) - 1]))
-        tick_vals = ckpts[idx]
-    else:
-        tick_vals = ckpts
+
+    # Label only powers of 10 within the data range.
+    lo = max(ckpts.min(), 1.0)
+    hi = ckpts.max()
+    p_lo = int(np.floor(np.log10(lo)))
+    p_hi = int(np.ceil(np.log10(hi)))
+    tick_vals = np.array([10**p for p in range(p_lo, p_hi + 1)
+                          if lo <= 10**p <= hi])
 
     if axis == "x":
         ax.set_xscale("log")
