@@ -37,7 +37,7 @@ experiment:
       epsilon: 0.01
       proposal:
         alpha: 0.5
-        clip_score: 5.0
+        clip_score: [0.1, 0.5, 1.0, 2.0, 5.0]
         count: 25
       preconditioner:
         type: "cholesky"
@@ -58,7 +58,7 @@ experiment:
       epsilon: 0.01
       proposal:
         alpha: 0.5
-        clip_score: 5.0
+        clip_score: [0.1, 0.5, 1.0, 2.0, 5.0]
         count: 25
       mutation:
         kernel: mala
@@ -83,5 +83,5 @@ experiment:
       type: "baseline"
       method: "mala"
       stepsize: 0.005
-      clip_score: 5.0
+      clip_score: [0.1, 0.5, 1.0, 2.0, 5.0]
       preconditioner: "cholesky"
