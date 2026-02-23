@@ -20,9 +20,17 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import NamedTuple, Optional, Protocol, runtime_checkable
+from typing import ClassVar, NamedTuple, Optional, Protocol, runtime_checkable
 
 import jax.numpy as jnp
+
+
+def _check_field(owner: str, field: str, value: str, allowed: frozenset[str]):
+    """Raise ``ValueError`` if *value* is not in *allowed*."""
+    if value not in allowed:
+        raise ValueError(
+            f"{owner}.{field} must be one of {sorted(allowed)}, got {value!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +94,17 @@ class ProposalConfig:
             ``0.0`` or ``inf`` disables clipping.
     """
 
+    TYPES: ClassVar[frozenset[str]] = frozenset({"score", "score_free"})
+
     type: str = "score"          # "score" | "score_free"
     count: int = 25              # M proposals
     alpha: float = 0.05          # drift step size
     fdr: bool = True             # sigma = sqrt(2*alpha)
     sigma: float = 0.0           # explicit; required when score_free or fdr=False
     clip_score: float = 5.0      # max score norm; 0 or inf = no clipping
+
+    def __post_init__(self):
+        _check_field("ProposalConfig", "type", self.type, self.TYPES)
 
     @property
     def use_score(self) -> bool:
@@ -129,9 +142,16 @@ class CostConfig:
             for Langevin cost whitening.
     """
 
+    TYPES: ClassVar[frozenset[str]] = frozenset({"euclidean", "linf", "imq", "langevin"})
+    NORMALIZATIONS: ClassVar[frozenset[str]] = frozenset({"median", "mean"})
+
     type: str = "euclidean"      # "euclidean" | "linf" | "imq" | "langevin"
     normalize: str = "median"    # "median" | "mean"
     params: tuple = ()           # sorted (key, value) pairs
+
+    def __post_init__(self):
+        _check_field("CostConfig", "type", self.type, self.TYPES)
+        _check_field("CostConfig", "normalize", self.normalize, self.NORMALIZATIONS)
 
     @property
     def whiten(self) -> bool:
@@ -155,10 +175,15 @@ class CouplingConfig:
         rho: Unbalanced only: tau/epsilon ratio.
     """
 
+    TYPES: ClassVar[frozenset[str]] = frozenset({"balanced", "unbalanced", "gibbs"})
+
     type: str = "balanced"       # "balanced" | "unbalanced" | "gibbs"
     iterations: int = 50         # Sinkhorn max iters
     tolerance: float = 1e-2      # Sinkhorn convergence
     rho: float = 1.0             # unbalanced only: tau/epsilon
+
+    def __post_init__(self):
+        _check_field("CouplingConfig", "type", self.type, self.TYPES)
 
 
 # ---------------------------------------------------------------------------
@@ -176,8 +201,13 @@ class UpdateConfig:
             (identity when 1.0, branchless).
     """
 
+    TYPES: ClassVar[frozenset[str]] = frozenset({"categorical", "barycentric"})
+
     type: str = "categorical"    # "categorical" | "barycentric"
     damping: float = 1.0         # (0, 1]
+
+    def __post_init__(self):
+        _check_field("UpdateConfig", "type", self.type, self.TYPES)
 
 
 # ---------------------------------------------------------------------------
@@ -243,6 +273,9 @@ class PreconditionerConfig:
         ema: EMA on covariance: 0.0 = fresh each step (Cholesky only).
     """
 
+    TYPES: ClassVar[frozenset[str]] = frozenset({"none", "rmsprop", "cholesky"})
+    SOURCES: ClassVar[frozenset[str]] = frozenset({"scores", "positions"})
+
     type: str = "none"                # "none" | "rmsprop" | "cholesky"
     proposals: bool = False           # apply to proposal drift + noise
     cost: bool = False                # apply to cost matrix whitening
@@ -257,6 +290,8 @@ class PreconditionerConfig:
     ema: float = 0.0                 # 0.0 = fresh each step
 
     def __post_init__(self):
+        _check_field("PreconditionerConfig", "type", self.type, self.TYPES)
+        _check_field("PreconditionerConfig", "source", self.source, self.SOURCES)
         if self.is_rmsprop and self.source != "scores":
             warnings.warn(
                 f"source={self.source!r} is ignored for type='rmsprop' "
@@ -313,11 +348,16 @@ class MutationConfig:
             from the parent config's ``proposal.clip_score``.
     """
 
+    KERNELS: ClassVar[frozenset[str]] = frozenset({"none", "mala", "rwm"})
+
     kernel: str = "none"              # "none" | "mala" | "rwm"
     steps: int = 5                    # MCMC sub-steps per ETD iteration
     stepsize: float = 0.01            # MALA/RWM step size h
     cholesky: bool = True             # Use ensemble Cholesky for proposal cov
     clip_score: Optional[float] = None  # None -> inherit from parent config
+
+    def __post_init__(self):
+        _check_field("MutationConfig", "kernel", self.kernel, self.KERNELS)
 
     @property
     def active(self) -> bool:
