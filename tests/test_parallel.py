@@ -471,7 +471,7 @@ class TestDoubleSweep:
         ])
         batch_keys = [seed_keys[s][1] for s in seeds]
 
-        m_by_cs, wc = run_sweep_batched(
+        m_by_cs, p_by_cs, wc = run_sweep_batched(
             batch_keys, gmm_target, base_config,
             configs, etd_init, etd_step, init_pos_all,
             ["epsilon"], 30, checkpoints, metrics_list, ref_data,
@@ -487,6 +487,14 @@ class TestDoubleSweep:
                 )
                 assert val > 0, (
                     f"Non-positive energy distance at config={c_idx}, seed={s_idx}"
+                )
+
+        # Particles should be stored at checkpoints
+        for c_idx in range(len(configs)):
+            for s_idx in range(len(seeds)):
+                pos = p_by_cs[c_idx][s_idx][30]
+                assert pos.shape == (50, 2), (
+                    f"Wrong shape at config={c_idx}, seed={s_idx}: {pos.shape}"
                 )
 
         # Different epsilon values should produce meaningfully different
@@ -537,7 +545,7 @@ class TestDoubleSweep:
         ])
         batch_keys = [seed_keys[s][1] for s in seeds]
 
-        m_by_cs, wc = run_sweep_batched(
+        m_by_cs, p_by_cs, wc = run_sweep_batched(
             batch_keys, gmm_target, base_config,
             configs, etd_init, etd_step, init_pos_all,
             ["epsilon", "proposal.alpha"],
@@ -555,6 +563,50 @@ class TestDoubleSweep:
         v1 = m_by_cs[1][0][15]["energy_distance"]
         # They shouldn't be exactly equal (different epsilon + alpha)
         assert v0 != v1, "Configs with different params produced identical results"
+
+    def test_sweep_returns_particles(self, gmm_target, shared, ref_data):
+        """Sweep returns particles at every checkpoint including 0."""
+        from experiments._parallel import run_sweep_batched
+        from etd.step import init as etd_init, step as etd_step
+
+        base_config = make_test_config(
+            n_particles=50, n_iterations=15, n_proposals=10,
+            coupling="balanced", cost="euclidean", update="categorical",
+            use_score=True, epsilon=0.1, alpha=0.05,
+        )
+        configs = [
+            dataclasses.replace(base_config, epsilon=e) for e in [0.05, 0.2]
+        ]
+        seeds = [0]
+        checkpoints = [0, 15]
+
+        seed_keys = {}
+        for seed in seeds:
+            key = jax.random.PRNGKey(seed)
+            k_init, k_run = jax.random.split(key)
+            seed_keys[seed] = (k_init, k_run)
+
+        init_pos_all = np.stack([
+            np.asarray(make_init_positions(seed_keys[s][0], gmm_target, shared))
+            for s in seeds
+        ])
+        batch_keys = [seed_keys[s][1] for s in seeds]
+
+        _m, p_by_cs, _wc = run_sweep_batched(
+            batch_keys, gmm_target, base_config,
+            configs, etd_init, etd_step, init_pos_all,
+            ["epsilon"], 15, checkpoints, ["energy_distance"], ref_data,
+            compute_metrics_fn=compute_metrics,
+        )
+
+        for c_idx in range(2):
+            for s_idx in range(1):
+                # Checkpoint 0 should be present
+                assert 0 in p_by_cs[c_idx][s_idx], "Missing checkpoint 0"
+                assert p_by_cs[c_idx][s_idx][0].shape == (50, 2)
+                # Checkpoint 15 should be present
+                assert 15 in p_by_cs[c_idx][s_idx], "Missing checkpoint 15"
+                assert p_by_cs[c_idx][s_idx][15].shape == (50, 2)
 
     def test_structural_grouping_in_sweep(self):
         """Configs with different coupling are in different groups."""
