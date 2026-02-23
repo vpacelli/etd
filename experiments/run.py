@@ -1223,8 +1223,36 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     wall_clocks = {}   # (seed, algo) -> seconds
 
     if parallel_seeds and not DEBUG:
-        # --- Batched path: vmap over seeds ---
-        from experiments._parallel import run_seeds_batched
+        # --- Batched path: vmap over seeds, grouped sweep over configs ---
+        from experiments._parallel import (
+            _compute_progress_segments,
+            group_configs_by_structure,
+            identify_varying_scalars,
+            run_seeds_batched,
+            run_sweep_batched,
+        )
+
+        def _unpack_sweep_results(
+            m_by_cs, p_by_cs, labels, wc,
+        ):
+            """Convert sweep result format to run.py accumulators."""
+            amortized_wc = wc / (len(labels) * len(seeds))
+            for c_idx, label in enumerate(labels):
+                for s_idx, seed in enumerate(seeds):
+                    all_metrics.setdefault(seed, {})[label] = m_by_cs[c_idx][s_idx]
+                    all_particles.setdefault(seed, {})[label] = p_by_cs[c_idx][s_idx]
+                    wall_clocks[(seed, label)] = amortized_wc
+
+        def _segments_count():
+            """Compute the number of progress segments."""
+            if n_progress is not None:
+                segs, _ = _compute_progress_segments(
+                    checkpoints, n_iters, n_progress,
+                )
+                return len(segs)
+            return len(_compute_segments(checkpoints, n_iters))
+
+        groups = group_configs_by_structure(algo_configs)
 
         with Progress(
             SpinnerColumn(),
@@ -1234,47 +1262,112 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
             TimeElapsedColumn(),
             console=console,
         ) as progress:
-            for label, config, init_fn, step_fn, is_bl in algo_configs:
-                # Progress: one tick per segment (not per seed)
-                segments_count = len(
-                    _compute_segments(checkpoints, n_iters)
-                )
-                if n_progress is not None:
-                    from experiments._parallel import _compute_progress_segments
-                    segs, _ = _compute_progress_segments(
-                        checkpoints, n_iters, n_progress,
+            for _struct_key, group_members in groups.items():
+                if len(group_members) == 1:
+                    # Single config: seed-only vmap (unchanged path)
+                    label, config, init_fn, step_fn, is_bl = group_members[0]
+                    seg_count = _segments_count()
+                    task_id = progress.add_task(
+                        f"  {label}", total=seg_count or 1,
                     )
-                    segments_count = len(segs)
 
-                task_id = progress.add_task(
-                    f"  {label}", total=segments_count or 1,
-                )
+                    m_by_seed, p_by_seed, wc = run_seeds_batched(
+                        batch_run_keys, target, config,
+                        init_fn, step_fn, all_init_pos,
+                        n_iters, checkpoints, metrics_list, ref_data,
+                        compute_metrics_fn=compute_metrics,
+                        n_progress=n_progress,
+                        progress_callback=lambda: progress.advance(task_id),
+                    )
 
-                m_by_seed, p_by_seed, wc = run_seeds_batched(
-                    batch_run_keys, target, config,
-                    init_fn, step_fn, all_init_pos,
-                    n_iters, checkpoints, metrics_list, ref_data,
-                    compute_metrics_fn=compute_metrics,
-                    n_progress=n_progress,
-                    progress_callback=lambda: progress.advance(task_id),
-                )
+                    for s_idx, seed in enumerate(seeds):
+                        all_metrics.setdefault(seed, {})[label] = m_by_seed[s_idx]
+                        all_particles.setdefault(seed, {})[label] = p_by_seed[s_idx]
+                        wall_clocks[(seed, label)] = wc / len(seeds)
 
-                # Unpack batched results into all_metrics / all_particles
-                for s_idx, seed in enumerate(seeds):
-                    all_metrics.setdefault(seed, {})[label] = m_by_seed[s_idx]
-                    all_particles.setdefault(seed, {})[label] = p_by_seed[s_idx]
-                    wall_clocks[(seed, label)] = wc / len(seeds)  # amortized
+                    if metrics_list:
+                        primary = metrics_list[0]
+                        pvals = [
+                            m_by_seed[i].get(max(checkpoints), {}).get(primary)
+                            for i in range(len(seeds))
+                        ]
+                        pvals = [v for v in pvals if v is not None and not np.isnan(v)]
+                        if pvals:
+                            print_algo_result(console, label, primary, float(np.mean(pvals)))
 
-                # Per-algo completion line (primary metric)
-                if metrics_list:
-                    primary = metrics_list[0]
-                    pvals = [
-                        m_by_seed[i].get(max(checkpoints), {}).get(primary)
-                        for i in range(len(seeds))
-                    ]
-                    pvals = [v for v in pvals if v is not None and not np.isnan(v)]
-                    if pvals:
-                        print_algo_result(console, label, primary, float(np.mean(pvals)))
+                else:
+                    # Multiple configs: try double vmap
+                    labels = [l for l, _, _, _, _ in group_members]
+                    configs_list = [c for _, c, _, _, _ in group_members]
+                    # All members share the same init_fn and step_fn
+                    _, _, init_fn, step_fn, _ = group_members[0]
+                    base_config = configs_list[0]
+
+                    sweep_fields = identify_varying_scalars(configs_list)
+
+                    if sweep_fields:
+                        # Double vmap: configs × seeds — compile once
+                        seg_count = _segments_count()
+                        task_id = progress.add_task(
+                            f"  {labels[0]}..{labels[-1]} ({len(configs_list)} configs)",
+                            total=seg_count or 1,
+                        )
+
+                        m_by_cs, p_by_cs, wc = run_sweep_batched(
+                            batch_run_keys, target, base_config,
+                            configs_list, init_fn, step_fn,
+                            all_init_pos, sweep_fields,
+                            n_iters, checkpoints, metrics_list, ref_data,
+                            compute_metrics_fn=compute_metrics,
+                            n_progress=n_progress,
+                            progress_callback=lambda: progress.advance(task_id),
+                        )
+
+                        _unpack_sweep_results(m_by_cs, p_by_cs, labels, wc)
+
+                        # Print per-algo completion lines (deferred)
+                        if metrics_list:
+                            primary = metrics_list[0]
+                            for c_idx, label in enumerate(labels):
+                                pvals = [
+                                    m_by_cs[c_idx][s].get(max(checkpoints), {}).get(primary)
+                                    for s in range(len(seeds))
+                                ]
+                                pvals = [v for v in pvals if v is not None and not np.isnan(v)]
+                                if pvals:
+                                    print_algo_result(console, label, primary, float(np.mean(pvals)))
+
+                    else:
+                        # Same scalar values — run each individually
+                        for label, config, init_fn_i, step_fn_i, is_bl_i in group_members:
+                            seg_count = _segments_count()
+                            task_id = progress.add_task(
+                                f"  {label}", total=seg_count or 1,
+                            )
+
+                            m_by_seed, p_by_seed, wc = run_seeds_batched(
+                                batch_run_keys, target, config,
+                                init_fn_i, step_fn_i, all_init_pos,
+                                n_iters, checkpoints, metrics_list, ref_data,
+                                compute_metrics_fn=compute_metrics,
+                                n_progress=n_progress,
+                                progress_callback=lambda: progress.advance(task_id),
+                            )
+
+                            for s_idx, seed in enumerate(seeds):
+                                all_metrics.setdefault(seed, {})[label] = m_by_seed[s_idx]
+                                all_particles.setdefault(seed, {})[label] = p_by_seed[s_idx]
+                                wall_clocks[(seed, label)] = wc / len(seeds)
+
+                            if metrics_list:
+                                primary = metrics_list[0]
+                                pvals = [
+                                    m_by_seed[i].get(max(checkpoints), {}).get(primary)
+                                    for i in range(len(seeds))
+                                ]
+                                pvals = [v for v in pvals if v is not None and not np.isnan(v)]
+                                if pvals:
+                                    print_algo_result(console, label, primary, float(np.mean(pvals)))
 
     else:
         # --- Sequential path (unchanged) ---
