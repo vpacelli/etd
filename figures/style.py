@@ -57,6 +57,41 @@ ALGO_COLORS = {
     "EKS": DARK_CRIMSON,
 }
 
+# Baseline algorithm names for family inference.
+_BASELINES = {"SVGD", "ULA", "MALA", "MPPI", "EKS"}
+
+
+def get_algo_color(label: str) -> str:
+    """Look up color for an algorithm label with family-based fallback.
+
+    Resolution order:
+    1. Exact match in ``ALGO_COLORS``.
+    2. Family palette based on prefix (``ETD``/``LRET`` → crimson,
+       ``SDD`` → blue, known baselines → gray/teal).
+    3. ``"#333333"`` (near-black) as final fallback.
+
+    Args:
+        label: Algorithm label (e.g., ``"ETD-B (MALA)"``).
+
+    Returns:
+        Hex color string.
+    """
+    if label in ALGO_COLORS:
+        return ALGO_COLORS[label]
+
+    # Family inference from prefix
+    if label.startswith(("ETD", "LRET")):
+        family = "etd"
+    elif label.startswith("SDD"):
+        family = "sdd"
+    elif label.split("(")[0].split("-")[0].strip() in _BASELINES:
+        family = "baseline"
+    else:
+        return "#333333"
+
+    return FAMILY_PALETTES[family][0]
+
+
 # Deterministic linestyle cycle for algorithms sharing similar colors.
 ALGO_LINESTYLES = {
     "ETD-B": "-",
