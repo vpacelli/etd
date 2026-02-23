@@ -56,7 +56,9 @@ experiment:
     - label: ETD-B
       sublabel: MALA
       cost: euclidean
-      coupling: balanced
+      coupling:
+        type: "balanced"
+        tolerance: 1e-3
       update: categorical
       epsilon: 0.05
       proposal:
