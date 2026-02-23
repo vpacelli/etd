@@ -135,21 +135,23 @@ def langevin_proposals(
     else:
         means = positions + alpha * scores                    # (N, d)
 
-    # --- Sample noise ---
-    noise = jax.random.normal(key, shape=(N, M, d))          # (N, M, d)
+    # --- Sample noise and build proposals in pooled (N*M, d) shape ---
+    # Work entirely in (N*M, d) after generating noise to avoid an XLA
+    # hlo_extractor bug where the compiler confuses (N*M, d) and (N, M, d)
+    # buffers across a reshape boundary during memory-bounded compilation.
+    noise = jax.random.normal(key, shape=(N, M, d))           # (N, M, d)
+    noise_pooled = noise.reshape(N * M, d)                     # (N*M, d)
+    means_pooled = jnp.repeat(means, M, axis=0)               # (N*M, d)
 
     if cholesky_factor is not None:
-        # σ · L @ ξ: einsum over last axis
-        scaled_noise = jnp.einsum('ij,nmj->nmi', cholesky_factor, noise)  # (N, M, d)
-        proposals = means[:, None, :] + sigma * scaled_noise
+        # σ · L @ ξ: matmul on pooled noise
+        scaled_noise = (cholesky_factor @ noise_pooled.T).T    # (N*M, d)
+        proposals = means_pooled + sigma * scaled_noise
     elif precondition:
         # σ · P ⊙ ξ
-        proposals = means[:, None, :] + sigma * P[None, None, :] * noise
+        proposals = means_pooled + sigma * P[None, :] * noise_pooled
     else:
-        proposals = means[:, None, :] + sigma * noise         # (N, M, d)
-
-    # --- Pool: (N, M, d) → (N*M, d) ---
-    proposals = proposals.reshape(N * M, d)
+        proposals = means_pooled + sigma * noise_pooled        # (N*M, d)
 
     return proposals, means, scores
 
