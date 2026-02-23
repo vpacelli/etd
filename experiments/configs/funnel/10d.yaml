@@ -56,7 +56,7 @@ experiment:
         type: cholesky
         proposals: true
         cost: true
-        source: particles
+        source: positions
         shrinkage: 0.1
 
     - label: "SVGD"
