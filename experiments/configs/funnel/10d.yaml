@@ -41,7 +41,7 @@ experiment:
       coupling:
         type: "balanced"
         tolerance: 1e-4
-        iterations: 100
+        iterations: 500
       update: categorical
       epsilon: 0.01
       proposal:
