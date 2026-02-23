@@ -191,6 +191,165 @@ def plot_particles(
     )
 
 
+def frame_panel(ax: plt.Axes, linewidth: float = 0.5) -> None:
+    """Style an axes as a thin-bordered frame with no ticks or labels.
+
+    Turns on all four spines and removes ticks. Useful for contour /
+    particle panels where coordinates are not meaningful.
+
+    Args:
+        ax: Matplotlib axes.
+        linewidth: Spine line width in points.
+    """
+    for spine in ax.spines.values():
+        spine.set_visible(True)
+        spine.set_linewidth(linewidth)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+
+def ref_line(
+    ax: plt.Axes,
+    value: float,
+    orientation: str = "horizontal",
+    **kwargs,
+) -> None:
+    """Draw a reference line (e.g., ideal share, zero baseline).
+
+    Defaults are tuned for visibility over colored fills: dark gray,
+    solid weight 0.8, zorder behind data but above fills.
+
+    Args:
+        ax: Matplotlib axes.
+        value: Position on the y-axis (horizontal) or x-axis (vertical).
+        orientation: ``"horizontal"`` or ``"vertical"``.
+        **kwargs: Overrides passed to ``ax.axhline`` / ``ax.axvline``.
+    """
+    defaults = dict(color="#444444", linewidth=0.8, linestyle="--", zorder=1)
+    defaults.update(kwargs)
+    if orientation == "vertical":
+        ax.axvline(value, **defaults)
+    else:
+        ax.axhline(value, **defaults)
+
+
+import math
+
+
+def facet_grid(
+    n_panels: int,
+    *,
+    total_width: float = FULL_WIDTH,
+    panel_size: float = 1.6,
+    sharex: bool = True,
+    sharey: bool = True,
+    square: bool = True,
+) -> tuple:
+    """Create a figure with wrapped rows of equal-sized panels.
+
+    Computes a grid that keeps each panel close to *panel_size* inches,
+    wrapping into multiple rows when needed.  Unused trailing axes are
+    hidden automatically.
+
+    Args:
+        n_panels: Number of axes needed.
+        total_width: Figure width in inches (default ``FULL_WIDTH``).
+        panel_size: Target panel width/height in inches.
+        sharex: Share x-axes within rows.
+        sharey: Share y-axes across panels.
+        square: If True, panel height equals panel width.
+
+    Returns:
+        ``(fig, axes)`` where *axes* is a flat array of length *n_panels*
+        (unused axes already hidden).
+    """
+    ncols = max(1, min(n_panels, int(total_width / panel_size)))
+    nrows = math.ceil(n_panels / ncols)
+    panel_w = total_width / ncols
+    panel_h = panel_w if square else panel_size
+    fig_h = panel_h * nrows
+
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(total_width, fig_h),
+        sharex=sharex, sharey=sharey,
+        constrained_layout=True,
+    )
+    axes_flat = np.atleast_1d(axes).ravel()
+
+    # Hide unused trailing axes
+    for i in range(n_panels, len(axes_flat)):
+        axes_flat[i].set_visible(False)
+
+    return fig, axes_flat[:n_panels]
+
+
+def metric_facet_grid(
+    n_metrics: int,
+    n_algos: int,
+    *,
+    total_width: float = FULL_WIDTH,
+    panel_size: float = 1.6,
+    panel_height: float = 1.2,
+) -> tuple:
+    """Create a wrapped grid for (metric rows) x (algorithm columns).
+
+    Like :func:`facet_grid` but preserves a 2D structure: algorithms
+    wrap into column groups, and each metric gets its own row within
+    each group.  Y-axes are shared across all panels for the same
+    metric, so scales stay comparable.
+
+    Args:
+        n_metrics: Number of metric rows (e.g., 2 for energy + mean error).
+        n_algos: Number of algorithm columns.
+        total_width: Figure width in inches.
+        panel_size: Target panel width in inches.
+        panel_height: Panel height in inches.
+
+    Returns:
+        ``(fig, axes_map)`` where *axes_map* is a 2D array of shape
+        ``(n_metrics, n_algos)`` with one axis per (metric, algorithm) pair.
+        Unused grid cells are hidden.
+    """
+    ncols = max(1, min(n_algos, int(total_width / panel_size)))
+    algo_nrows = math.ceil(n_algos / ncols)
+    total_rows = n_metrics * algo_nrows
+
+    fig, all_axes = plt.subplots(
+        total_rows, ncols,
+        figsize=(total_width, panel_height * total_rows),
+        squeeze=False,
+        constrained_layout=True,
+    )
+
+    # Build a (n_metrics, n_algos) map into the raw grid
+    axes_map = np.empty((n_metrics, n_algos), dtype=object)
+    for m in range(n_metrics):
+        for a in range(n_algos):
+            row = m + (a // ncols) * n_metrics
+            col = a % ncols
+            axes_map[m, a] = all_axes[row, col]
+
+    # Share y within each metric, share x across all
+    for m in range(n_metrics):
+        anchor = axes_map[m, 0]
+        for a in range(1, n_algos):
+            axes_map[m, a].sharey(anchor)
+    for row in range(total_rows):
+        anchor = all_axes[row, 0]
+        for col in range(1, ncols):
+            all_axes[row, col].sharex(anchor)
+
+    # Hide unused trailing cells
+    for a in range(n_algos, algo_nrows * ncols):
+        for m in range(n_metrics):
+            row = m + (a // ncols) * n_metrics
+            col = a % ncols
+            all_axes[row, col].set_visible(False)
+
+    return fig, axes_map
+
+
 def savefig_paper(
     fig: Figure,
     name: str,
