@@ -45,6 +45,7 @@ experiment:
         count: 25
         alpha: 2.0
       update:
+        type: categorical
         damping: 0.5
       preconditioner:
         type: "cholesky"
@@ -59,22 +60,24 @@ experiment:
       coupling:
         type: "balanced"
         tolerance: 1e-5
-      update: categorical
       epsilon: 0.01
       proposal:
-        alpha: [0.1, 0.5, 1.0, 2.0]
         count: 25
-      mutation:
-        kernel: mala
-        steps: 10
-        stepsize: 0.005
-        cholesky: true
+        alpha: 2.0
+      update:
+        type: categorical
+        damping: 0.5
       preconditioner:
-        type: cholesky
+        type: "cholesky"
         proposals: true
         cost: true
-        source: particles
-        shrinkage: 0.1
+        source: positions
+        ema: 0.8
+      mutation:
+        kernel: mala
+        steps: [1, 3, 5, 10]
+        stepsize: 0.005
+        cholesky: true
 
     # - label: ETD-B-Linf
     #   cost: linf
