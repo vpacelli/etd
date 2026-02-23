@@ -125,12 +125,17 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     # --- Expand sweeps ---
     algo_configs = []
     for entry in algo_entries:
+        if not entry.get("enabled", True):
+            continue
         original = dict(entry)
         expanded = expand_algo_sweeps(entry)
         for concrete in expanded:
-            label = build_algo_label(
-                concrete.get("label", "unnamed"), concrete, original,
-            )
+            # Compose sublabel into base label before building sweep suffix
+            base = concrete.get("label", "unnamed")
+            sublabel = concrete.get("sublabel")
+            if sublabel:
+                base = f"{base} ({sublabel})"
+            label = build_algo_label(base, concrete, original)
             config, init_fn, step_fn, is_bl = build_algo_config(concrete, shared)
             algo_configs.append((label, config, init_fn, step_fn, is_bl, concrete))
 

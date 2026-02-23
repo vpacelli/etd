@@ -185,12 +185,13 @@ def _collect_sweep_axes(entry: dict, prefix: str = ""):
     Returns:
         List of ``(dotted_key, values_list)`` pairs.
     """
+    _SWEEP_EXCLUDE = {"label", "sublabel", "display", "enabled"}
     axes = []
     for k, v in entry.items():
         full_key = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
+        if isinstance(v, dict) and k != "display":
             axes.extend(_collect_sweep_axes(v, prefix=full_key))
-        elif isinstance(v, list) and k not in ("label",):
+        elif isinstance(v, list) and k not in _SWEEP_EXCLUDE:
             axes.append((full_key, v))
     return axes
 
@@ -291,7 +292,7 @@ def build_algo_label(base_label: str, entry: dict, original: dict) -> str:
 # ---------------------------------------------------------------------------
 
 # Parameters that are NOT passed to ETDConfig (they are meta or shared)
-_ETD_META_KEYS = {"label", "type", "method"}
+_ETD_META_KEYS = {"label", "type", "method", "sublabel", "display", "enabled"}
 
 
 def _resolve_preconditioner_config(kwargs: dict) -> dict:
@@ -398,7 +399,7 @@ def build_algo_config(
         # Build kwargs from entry + shared
         kwargs = {}
         for k, v in entry.items():
-            if k in ("label", "type", "method"):
+            if k in _ETD_META_KEYS:
                 continue
             kwargs[k] = v
 
@@ -770,6 +771,7 @@ def save_results(
     all_metrics: dict,
     all_particles: dict,
     ref_data=None,
+    display_metadata=None,
 ) -> str:
     """Save experiment results to disk.
 
@@ -779,6 +781,8 @@ def save_results(
         all_metrics: ``{seed → {algo → {ckpt → {metric → val}}}}``.
         all_particles: ``{seed → {algo → {ckpt → (N,d) ndarray}}}``.
         ref_data: Reference samples ``(M, d)`` to bundle for portability.
+        display_metadata: Resolved display styles ``{label → {family, color, ...}}``
+            from :func:`figures.style.resolve_algo_styles`.
 
     Returns:
         Output directory path.
@@ -818,6 +822,11 @@ def save_results(
             os.path.join(out_dir, "reference.npz"),
             samples=np.asarray(ref_data),
         )
+
+    # Save display metadata for downstream plotting
+    if display_metadata is not None:
+        with open(os.path.join(out_dir, "metadata.json"), "w") as f:
+            json.dump(display_metadata, f, indent=2)
 
     return out_dir
 
@@ -924,15 +933,33 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
     # --- Expand sweeps and build configs ---
     algo_configs = []  # list of (label, config, init_fn, step_fn, is_baseline)
+    algo_display_meta = []  # display metadata per algo (YAML order)
     for entry in algo_entries:
+        if not entry.get("enabled", True):
+            continue
         original = dict(entry)
         expanded = expand_algo_sweeps(entry)
         for concrete in expanded:
-            label = build_algo_label(
-                concrete.get("label", "unnamed"), concrete, original
-            )
+            # Compose sublabel into base label before building sweep suffix
+            base = concrete.get("label", "unnamed")
+            sublabel = concrete.get("sublabel")
+            if sublabel:
+                base = f"{base} ({sublabel})"
+            label = build_algo_label(base, concrete, original)
+
             config, init_fn, step_fn, is_bl = build_algo_config(concrete, shared)
             algo_configs.append((label, config, init_fn, step_fn, is_bl))
+
+            # Collect display metadata
+            display = concrete.get("display", {})
+            algo_display_meta.append({
+                "label": label,
+                "family": display.get("family"),
+                "color": display.get("color"),
+                "linestyle": display.get("linestyle", "-"),
+                "group": display.get("group"),
+                "is_baseline": is_bl,
+            })
 
     algo_labels = [ac[0] for ac in algo_configs]
     n_iters = shared.get("n_iterations", 500)
@@ -996,10 +1023,17 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
         metrics_list, wall_clocks,
     )
 
+    # --- Resolve display metadata ---
+    from figures.style import resolve_algo_styles
+    resolved_styles = resolve_algo_styles(algo_display_meta)
+
     # --- Save ---
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     out_dir = os.path.join("results", name, timestamp)
-    save_results(out_dir, cfg, all_metrics, all_particles, ref_data=ref_data)
+    save_results(
+        out_dir, cfg, all_metrics, all_particles,
+        ref_data=ref_data, display_metadata=resolved_styles,
+    )
     console.print(f"\n✓ Results saved to {out_dir}/")
 
     return all_metrics

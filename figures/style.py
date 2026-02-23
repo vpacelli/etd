@@ -5,6 +5,7 @@ plotting helpers.  Call :func:`setup_style` once before creating
 any figures.
 """
 
+import json
 import os
 from typing import Callable, Optional
 
@@ -47,6 +48,35 @@ ALGO_COLORS = {
     "ULA": SLATE_GRAY,
     "MPPI": "#6A5ACD",      # Slate blue — distinct from ULA's gray
     "EKS": DARK_CRIMSON,
+}
+
+# Family-based palettes for automatic color assignment.
+# Within each family, algorithms are assigned consecutive palette colors
+# in YAML order.
+FAMILY_PALETTES = {
+    "etd": [
+        "#DC143C",  # crimson (primary)
+        "#A10E2B",  # dark crimson
+        "#B22222",  # firebrick
+        "#E89DA3",  # light crimson
+        "#8B0A1A",  # deepest
+        "#F08080",  # light coral
+    ],
+    "sdd": [
+        "#4682B4",  # steel blue (primary)
+        "#2C5F8A",  # dark steel
+        "#6A9FD0",  # medium blue
+        "#1A3D5C",  # navy
+        "#87CEEB",  # sky blue
+    ],
+    "baseline": [
+        "#708090",  # slate gray
+        "#2E8B8B",  # teal
+        "#6A5ACD",  # slate blue
+        "#8B4513",  # saddle brown
+        "#556B2F",  # dark olive
+        "#9370DB",  # medium purple
+    ],
 }
 
 # ---------------------------------------------------------------------------
@@ -182,3 +212,94 @@ def savefig_paper(
     path = os.path.join(output_dir, f"{name}.{fmt}")
     fig.savefig(path, bbox_inches="tight")
     return path
+
+
+# ---------------------------------------------------------------------------
+# Display metadata resolution
+# ---------------------------------------------------------------------------
+
+def _infer_family(meta: dict) -> str:
+    """Infer family from label prefix and baseline flag.
+
+    Args:
+        meta: Dict with keys ``label``, ``family``, ``is_baseline``.
+
+    Returns:
+        Family string: ``"etd"``, ``"sdd"``, or ``"baseline"``.
+    """
+    if meta.get("family"):
+        return meta["family"]
+    label = meta.get("label", "")
+    if label.startswith("ETD") or label.startswith("LRET"):
+        return "etd"
+    if label.startswith("SDD"):
+        return "sdd"
+    if meta.get("is_baseline"):
+        return "baseline"
+    return "etd"
+
+
+def resolve_algo_styles(algo_display_meta: list[dict]) -> dict[str, dict]:
+    """Resolve display metadata into concrete plot styles.
+
+    Assigns family-palette colors by YAML order within each family.
+    Explicit ``color`` overrides palette. ``ALGO_COLORS`` is a
+    secondary fallback for known labels.
+
+    Args:
+        algo_display_meta: List of dicts (YAML order), each with keys:
+            ``label``, ``family`` (or None), ``color`` (or None),
+            ``linestyle``, ``group``, ``is_baseline``.
+
+    Returns:
+        Ordered dict ``{label: {family, color, linestyle, group}}``.
+    """
+    # Pass 1: infer families
+    families = [_infer_family(m) for m in algo_display_meta]
+
+    # Pass 2: assign colors in YAML order, per-family counter
+    family_counters: dict[str, int] = {}
+    result: dict[str, dict] = {}
+
+    for meta, family in zip(algo_display_meta, families):
+        label = meta["label"]
+        linestyle = meta.get("linestyle", "-")
+        group = meta.get("group")
+
+        # Color priority: explicit > ALGO_COLORS > family palette
+        explicit_color = meta.get("color")
+        if explicit_color:
+            color = explicit_color
+        elif label in ALGO_COLORS:
+            color = ALGO_COLORS[label]
+        else:
+            palette = FAMILY_PALETTES.get(family, FAMILY_PALETTES["etd"])
+            idx = family_counters.get(family, 0)
+            color = palette[idx % len(palette)]
+            family_counters[family] = idx + 1
+
+        result[label] = {
+            "family": family,
+            "color": color,
+            "linestyle": linestyle,
+            "group": group,
+        }
+
+    return result
+
+
+def load_display_metadata(results_dir: str) -> dict[str, dict]:
+    """Load metadata.json from a results directory.
+
+    Args:
+        results_dir: Path to the results directory.
+
+    Returns:
+        Dict ``{label: {family, color, linestyle, group}}`` or empty dict
+        if no metadata.json exists.
+    """
+    path = os.path.join(results_dir, "metadata.json")
+    if not os.path.exists(path):
+        return {}
+    with open(path) as f:
+        return json.load(f)

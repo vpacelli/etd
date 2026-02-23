@@ -270,7 +270,7 @@ class TestLoadConfig:
         cfg = load_config("experiments/configs/gmm_2d_4.yaml")
         assert cfg["experiment"]["name"] == "gmm-2d-4"
         assert len(cfg["experiment"]["seeds"]) == 5
-        assert len(cfg["experiment"]["algorithms"]) == 8
+        assert len(cfg["experiment"]["algorithms"]) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -380,3 +380,261 @@ class TestResolveMutationConfig:
         config, _, _, _ = build_algo_config(entry, shared)
         assert config.mutation.kernel == "none"
         assert not config.mutation.active
+
+
+# ---------------------------------------------------------------------------
+# Enabled flag
+# ---------------------------------------------------------------------------
+
+class TestEnabledFlag:
+    """The ``enabled`` field controls whether an algorithm entry is included."""
+
+    def test_enabled_default_true(self):
+        """Missing ``enabled`` field defaults to True (entry included)."""
+        entry = {"label": "ETD-B", "epsilon": 0.1}
+        assert entry.get("enabled", True) is True
+
+    def test_enabled_false_skips(self):
+        """Entry with ``enabled: false`` is excluded from expansion."""
+        entries = [
+            {"label": "ETD-B", "epsilon": 0.1},
+            {"label": "ULA", "type": "baseline", "method": "ula",
+             "step_size": 0.01, "enabled": False},
+        ]
+        active = [e for e in entries if e.get("enabled", True)]
+        assert len(active) == 1
+        assert active[0]["label"] == "ETD-B"
+
+
+# ---------------------------------------------------------------------------
+# Sublabel
+# ---------------------------------------------------------------------------
+
+class TestSublabel:
+    """Sublabel composes into label as ``"Label (sublabel)"``."""
+
+    def test_sublabel_parenthetical(self):
+        """Sublabel produces parenthetical display name."""
+        base = "ETD-B"
+        sublabel = "whitened"
+        result = f"{base} ({sublabel})"
+        assert result == "ETD-B (whitened)"
+
+    def test_no_sublabel_unchanged(self):
+        """Missing sublabel leaves label as-is."""
+        entry = {"label": "ETD-B", "epsilon": 0.1}
+        base = entry.get("label", "unnamed")
+        sublabel = entry.get("sublabel")
+        if sublabel:
+            base = f"{base} ({sublabel})"
+        assert base == "ETD-B"
+
+    def test_sublabel_with_sweep(self):
+        """Sweep suffix comes after sublabel: ``"ETD-B (wh)_eps=0.1"``."""
+        original = {"label": "ETD-B", "sublabel": "wh", "epsilon": [0.1, 0.5]}
+        expanded = expand_algo_sweeps(original)
+        labels = []
+        for concrete in expanded:
+            base = concrete.get("label", "unnamed")
+            sublabel = concrete.get("sublabel")
+            if sublabel:
+                base = f"{base} ({sublabel})"
+            label = build_algo_label(base, concrete, original)
+            labels.append(label)
+        assert labels[0] == "ETD-B (wh)_eps=0.1"
+        assert labels[1] == "ETD-B (wh)_eps=0.5"
+
+
+# ---------------------------------------------------------------------------
+# Display metadata filtering
+# ---------------------------------------------------------------------------
+
+class TestDisplayMetaFiltering:
+    """Display/sublabel/enabled fields must not leak into algorithm configs."""
+
+    def test_display_excluded_from_etd_config(self):
+        """``display`` block doesn't leak into ETDConfig."""
+        entry = {
+            "label": "ETD-B",
+            "coupling": "balanced",
+            "epsilon": 0.1,
+            "alpha": 0.05,
+            "display": {"family": "etd", "group": "transport"},
+        }
+        shared = {"n_particles": 50, "n_iterations": 100}
+        config, _, _, is_bl = build_algo_config(entry, shared)
+        assert not is_bl
+        assert not hasattr(config, "display")
+
+    def test_display_excluded_from_baseline_config(self):
+        """``display`` block doesn't leak into baseline configs."""
+        entry = {
+            "label": "SVGD",
+            "type": "baseline",
+            "method": "svgd",
+            "learning_rate": 0.1,
+            "display": {"linestyle": "--"},
+        }
+        shared = {"n_particles": 50, "n_iterations": 100}
+        config, _, _, is_bl = build_algo_config(entry, shared)
+        assert is_bl
+        assert not hasattr(config, "display")
+
+    def test_sublabel_excluded_from_config(self):
+        """``sublabel`` doesn't leak into ETDConfig."""
+        entry = {
+            "label": "ETD-B",
+            "sublabel": "whitened",
+            "coupling": "balanced",
+            "epsilon": 0.1,
+            "alpha": 0.05,
+        }
+        shared = {"n_particles": 50, "n_iterations": 100}
+        config, _, _, _ = build_algo_config(entry, shared)
+        assert not hasattr(config, "sublabel")
+
+
+# ---------------------------------------------------------------------------
+# Display not swept
+# ---------------------------------------------------------------------------
+
+class TestDisplayNotSwept:
+    """``display`` block must not create sweep combinations."""
+
+    def test_display_dict_not_expanded(self):
+        """Display dict is not treated as a nested sweep axis."""
+        entry = {
+            "label": "ETD-B",
+            "epsilon": 0.1,
+            "display": {"family": "etd", "color": "#DC143C"},
+        }
+        expanded = expand_algo_sweeps(entry)
+        assert len(expanded) == 1
+
+    def test_display_preserved_in_expansion(self):
+        """Display block is copied to all expanded entries."""
+        entry = {
+            "label": "ETD-B",
+            "epsilon": [0.1, 0.5],
+            "display": {"family": "etd", "group": "transport"},
+        }
+        expanded = expand_algo_sweeps(entry)
+        assert len(expanded) == 2
+        for e in expanded:
+            assert e["display"]["family"] == "etd"
+            assert e["display"]["group"] == "transport"
+
+
+# ---------------------------------------------------------------------------
+# resolve_algo_styles
+# ---------------------------------------------------------------------------
+
+class TestResolveAlgoStyles:
+    """Tests for the family-palette color resolver."""
+
+    def test_family_inference_etd(self):
+        """ETD prefix → etd family."""
+        from figures.style import _infer_family
+        assert _infer_family({"label": "ETD-B"}) == "etd"
+
+    def test_family_inference_lret(self):
+        """LRET prefix → etd family."""
+        from figures.style import _infer_family
+        assert _infer_family({"label": "LRET-B"}) == "etd"
+
+    def test_family_inference_baseline(self):
+        """is_baseline flag → baseline family."""
+        from figures.style import _infer_family
+        assert _infer_family({"label": "SVGD", "is_baseline": True}) == "baseline"
+
+    def test_explicit_family_overrides(self):
+        """Explicit ``family`` takes precedence over label prefix."""
+        from figures.style import _infer_family
+        assert _infer_family({"label": "ETD-B", "family": "custom"}) == "custom"
+
+    def test_explicit_color_overrides_palette(self):
+        """Explicit ``color`` bypasses palette assignment."""
+        from figures.style import resolve_algo_styles
+        meta = [{"label": "X", "color": "#FF0000", "is_baseline": False}]
+        result = resolve_algo_styles(meta)
+        assert result["X"]["color"] == "#FF0000"
+
+    def test_algo_colors_fallback(self):
+        """Known ALGO_COLORS label gets its registered color."""
+        from figures.style import resolve_algo_styles, ALGO_COLORS
+        meta = [{"label": "SVGD", "is_baseline": True}]
+        result = resolve_algo_styles(meta)
+        assert result["SVGD"]["color"] == ALGO_COLORS["SVGD"]
+
+    def test_yaml_order_palette_assignment(self):
+        """Two etd-family algos get consecutive palette colors."""
+        from figures.style import resolve_algo_styles, FAMILY_PALETTES
+        meta = [
+            {"label": "AlgoA", "is_baseline": False},
+            {"label": "AlgoB", "is_baseline": False},
+        ]
+        result = resolve_algo_styles(meta)
+        assert result["AlgoA"]["color"] == FAMILY_PALETTES["etd"][0]
+        assert result["AlgoB"]["color"] == FAMILY_PALETTES["etd"][1]
+
+    def test_linestyle_default_solid(self):
+        """Default linestyle is ``"-"``."""
+        from figures.style import resolve_algo_styles
+        meta = [{"label": "X", "is_baseline": False}]
+        result = resolve_algo_styles(meta)
+        assert result["X"]["linestyle"] == "-"
+
+    def test_group_preserved(self):
+        """Group string passes through unchanged."""
+        from figures.style import resolve_algo_styles
+        meta = [{"label": "X", "group": "transport", "is_baseline": False}]
+        result = resolve_algo_styles(meta)
+        assert result["X"]["group"] == "transport"
+
+    def test_legend_order_matches_yaml_order(self):
+        """Dict keys preserve YAML insertion order."""
+        from figures.style import resolve_algo_styles
+        meta = [
+            {"label": "C", "is_baseline": False},
+            {"label": "A", "is_baseline": True},
+            {"label": "B", "is_baseline": False},
+        ]
+        result = resolve_algo_styles(meta)
+        assert list(result.keys()) == ["C", "A", "B"]
+
+
+# ---------------------------------------------------------------------------
+# Metadata save / load
+# ---------------------------------------------------------------------------
+
+class TestMetadataSave:
+    """Tests for metadata.json persistence."""
+
+    def test_metadata_json_saved(self):
+        """Round-trip: save + load metadata.json."""
+        from figures.style import load_display_metadata
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = {"experiment": {"name": "test"}}
+            all_metrics = {0: {"X": {10: {"ed": 0.1}}}}
+            all_particles = {0: {"X": {10: np.random.randn(5, 2)}}}
+            display_meta = {
+                "X": {"family": "etd", "color": "#DC143C",
+                       "linestyle": "-", "group": None},
+            }
+            save_results(
+                tmpdir, cfg, all_metrics, all_particles,
+                display_metadata=display_meta,
+            )
+            assert os.path.exists(os.path.join(tmpdir, "metadata.json"))
+            loaded = load_display_metadata(tmpdir)
+            assert loaded["X"]["color"] == "#DC143C"
+            assert loaded["X"]["family"] == "etd"
+
+    def test_metadata_json_not_saved_when_none(self):
+        """No metadata.json when display_metadata is None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = {"experiment": {"name": "test"}}
+            all_metrics = {0: {"X": {10: {"ed": 0.1}}}}
+            all_particles = {0: {"X": {10: np.random.randn(5, 2)}}}
+            save_results(tmpdir, cfg, all_metrics, all_particles)
+            assert not os.path.exists(os.path.join(tmpdir, "metadata.json"))
