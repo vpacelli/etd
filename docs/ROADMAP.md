@@ -234,7 +234,7 @@ baseline also gains Cholesky preconditioning for fair ablations.
 - [x] `extensions/sdd.py`: Mirror mutation integration (SDDState, SDDConfig, init, step)
 - [x] `baselines/mala.py`: Cholesky preconditioning mode via `mala_kernel`
 - [x] `experiments/run.py`: `_resolve_mutation_config`, YAML wiring
-- [x] `experiments/configs/blr_mutation.yaml`: Example config
+- [x] `experiments/configs/blr/mutation.yaml`: Example config
 - [x] Integration tests: convergence, acceptance rate, JIT/scan compatibility
 
 ### Gate

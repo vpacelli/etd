@@ -2,15 +2,13 @@
 
 Covers:
   - Mahalanobis cost: correctness, reduction to Euclidean, non-negativity
-  - L∞ cost: correctness, non-negativity, bounded by Euclidean
+  - L-inf cost: correctness, non-negativity, bounded by Euclidean
   - Unbalanced Sinkhorn: Gibbs limit, balanced limit, source marginals, warm-start
   - DV feedback: effect on coupling, no-op on first step
   - Integration: validation, smoke tests for each variant
 """
 
 import functools
-import warnings
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -25,7 +23,9 @@ from etd.coupling.gibbs import gibbs_coupling
 from etd.coupling.sinkhorn import sinkhorn_log_domain
 from etd.coupling.unbalanced import sinkhorn_unbalanced
 from etd.step import init as etd_init, step as etd_step
-from etd.types import ETDConfig
+from etd.types import CostConfig, PreconditionerConfig
+
+from conftest import make_test_config
 
 
 # ---------------------------------------------------------------------------
@@ -115,12 +115,12 @@ class TestMahalanobisCost:
 
 
 # ===========================================================================
-# L∞ Cost
+# L-inf Cost
 # ===========================================================================
 
 class TestLinfCost:
     def test_known_values(self):
-        """Hand-computed L∞ cost."""
+        """Hand-computed L-inf cost."""
         x = jnp.array([[1.0, 5.0, 3.0]])  # (1, 3)
         y = jnp.array([[4.0, 2.0, 7.0]])  # (1, 3)
 
@@ -141,17 +141,17 @@ class TestLinfCost:
         np.testing.assert_allclose(np.array(jnp.diag(C)), 0.0, atol=1e-6)
 
     def test_dominated_by_euclidean(self, positions_proposals):
-        """L∞ cost ≤ L2 cost since ||x||_∞ ≤ ||x||_2.
+        """L-inf cost <= L2 cost since ||x||_inf <= ||x||_2.
 
-        More precisely: ||x||_∞ ≤ ||x||_2, but the Euclidean cost
-        is (1/2)||x||_2^2 while L∞ is ||x||_∞. So the comparison is:
-        linf ≤ sqrt(2 * euclidean) since ||x||_∞ ≤ ||x||_2 = sqrt(2 * C_euc).
+        More precisely: ||x||_inf <= ||x||_2, but the Euclidean cost
+        is (1/2)||x||_2^2 while L-inf is ||x||_inf. So the comparison is:
+        linf <= sqrt(2 * euclidean) since ||x||_inf <= ||x||_2 = sqrt(2 * C_euc).
         """
         positions, proposals = positions_proposals
         C_linf = linf_cost(positions, proposals)
         C_euc = squared_euclidean_cost(positions, proposals)
 
-        # ||x-y||_∞ ≤ ||x-y||_2 = sqrt(2 * C_euc)
+        # ||x-y||_inf <= ||x-y||_2 = sqrt(2 * C_euc)
         assert jnp.all(C_linf <= jnp.sqrt(2.0 * C_euc) + 1e-6)
 
     def test_shape(self, positions_proposals):
@@ -180,9 +180,9 @@ class TestUnbalancedSinkhorn:
         return C, log_a, log_b
 
     def test_reduces_to_gibbs_at_small_rho(self, coupling_inputs):
-        """At rho ≈ 0, unbalanced should approximate Gibbs coupling.
+        """At rho ~ 0, unbalanced should approximate Gibbs coupling.
 
-        With very small rho, g → 0, so log_b drops out of the coupling.
+        With very small rho, g -> 0, so log_b drops out of the coupling.
         The Gibbs coupling includes log_b in the kernel. These agree
         only when log_b is uniform, so we test with uniform target weights.
         """
@@ -194,7 +194,7 @@ class TestUnbalancedSinkhorn:
         # Gibbs reference (with uniform log_b)
         log_gamma_gibbs, _, _ = gibbs_coupling(C, log_a, log_b_uniform, eps=eps)
 
-        # Unbalanced with rho ≈ 0
+        # Unbalanced with rho ~ 0
         log_gamma_ub, _, _, _ = sinkhorn_unbalanced(
             C, log_a, log_b_uniform, eps=eps, rho=1e-4, max_iter=200,
         )
@@ -218,7 +218,7 @@ class TestUnbalancedSinkhorn:
             C, log_a, log_b, eps=eps, max_iter=200,
         )
 
-        # Unbalanced with very large rho (lambda ≈ 1)
+        # Unbalanced with very large rho (lambda ~ 1)
         log_gamma_ub, _, _, _ = sinkhorn_unbalanced(
             C, log_a, log_b, eps=eps, rho=1000.0, max_iter=200,
         )
@@ -246,7 +246,7 @@ class TestUnbalancedSinkhorn:
         log_row_sums = logsumexp(log_gamma, axis=1)
 
         # Source marginal is not strictly enforced in unbalanced OT the same
-        # way as balanced — but the f-update does enforce it per-iteration.
+        # way as balanced -- but the f-update does enforce it per-iteration.
         # Check approximate agreement.
         np.testing.assert_allclose(
             np.array(log_row_sums), np.array(log_a), atol=0.1,
@@ -292,21 +292,21 @@ class TestUnbalancedSinkhorn:
 
 class TestDVFeedback:
     def test_dv_no_effect_initial(self, rng):
-        """On first step, dual_g = zeros → DV feedback should have no effect.
+        """On first step, dual_g = zeros -> DV feedback should have no effect.
 
-        We compare two runs: one with dv_feedback=True, one without.
-        On the very first step, dual_g is all zeros, so -dv_weight * dual_g = 0
+        We compare two runs: one with feedback enabled, one without.
+        On the very first step, dual_g is all zeros, so -weight * dual_g = 0
         and the coupling should be identical.
         """
         target = SimpleGaussian(dim=3)
         key = rng
 
-        config_base = ETDConfig(
+        config_base = make_test_config(
             n_particles=10, n_proposals=5, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             dv_feedback=False,
         )
-        config_dv = ETDConfig(
+        config_dv = make_test_config(
             n_particles=10, n_proposals=5, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             dv_feedback=True, dv_weight=1.0,
@@ -331,7 +331,7 @@ class TestDVFeedback:
         target = SimpleGaussian(dim=3)
         key = rng
 
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=10, n_proposals=5, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             dv_feedback=True, dv_weight=1.0,
@@ -348,7 +348,7 @@ class TestDVFeedback:
         _, info_dv = etd_step(k3, state_1, target, config)
 
         # Run second step without DV
-        config_no_dv = ETDConfig(
+        config_no_dv = make_test_config(
             n_particles=10, n_proposals=5, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             dv_feedback=False,
@@ -359,13 +359,13 @@ class TestDVFeedback:
         ess_dv = float(info_dv["coupling_ess"])
         ess_no_dv = float(info_no_dv["coupling_ess"])
         assert ess_dv != pytest.approx(ess_no_dv, abs=1e-3), (
-            f"DV feedback should change coupling: {ess_dv} ≈ {ess_no_dv}"
+            f"DV feedback should change coupling: {ess_dv} ~ {ess_no_dv}"
         )
 
     def test_dv_potential_shape_and_finiteness(self, rng):
         """After one step with DV: dv_potential has shape (N,) and all finite."""
         target = SimpleGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=8, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             dv_feedback=True, dv_weight=1.0,
@@ -378,9 +378,9 @@ class TestDVFeedback:
         assert jnp.all(jnp.isfinite(new_state.dv_potential))
 
     def test_dv_potential_zeros_when_disabled(self, rng):
-        """With dv_feedback=False: dv_potential should be all zeros."""
+        """With feedback disabled: dv_potential should be all zeros."""
         target = SimpleGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=8, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             dv_feedback=False,
@@ -394,7 +394,7 @@ class TestDVFeedback:
         )
 
     def test_dv_potential_full_step_equals_g_tilde(self, rng):
-        """With step_size=1.0: dv_potential == g_tilde[indices] (no interpolation).
+        """With damping=1.0: dv_potential == g_tilde[indices] (no interpolation).
 
         At full step, the interpolation formula (1-eta)*f + eta*g_tilde[j]
         reduces to just g_tilde[j].
@@ -402,10 +402,10 @@ class TestDVFeedback:
         target = SimpleGaussian(dim=3)
         N, M = 15, 8
         eps_val = 0.5
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=N, n_proposals=M, n_iterations=1,
             coupling="balanced", epsilon=eps_val, alpha=0.05,
-            step_size=1.0,  # full step
+            step_size=1.0,  # full step -> update.damping=1.0
             dv_feedback=True, dv_weight=1.0,
         )
         k1, k2 = jax.random.split(rng)
@@ -421,16 +421,16 @@ class TestDVFeedback:
         assert jnp.all(jnp.isfinite(new_state.dv_potential))
 
     def test_dv_potential_interpolation(self, rng):
-        """With step_size=0.5: dv_potential blends dual_f and g_tilde."""
+        """With damping=0.5: dv_potential blends dual_f and g_tilde."""
         target = SimpleGaussian(dim=3)
         N, M = 15, 8
-        config_full = ETDConfig(
+        config_full = make_test_config(
             n_particles=N, n_proposals=M, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             step_size=1.0,
             dv_feedback=True, dv_weight=1.0,
         )
-        config_half = ETDConfig(
+        config_half = make_test_config(
             n_particles=N, n_proposals=M, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
             step_size=0.5,
@@ -442,7 +442,7 @@ class TestDVFeedback:
         # Run one step to build up non-zero dv_potential and duals
         state_1, _ = etd_step(k2, state, target, config_full)
 
-        # Second step with full vs half step — same key so same proposals/coupling
+        # Second step with full vs half step -- same key so same proposals/coupling
         k3, _ = jax.random.split(k2)
         state_full, _ = etd_step(k3, state_1, target, config_full)
         state_half, _ = etd_step(k3, state_1, target, config_half)
@@ -456,7 +456,7 @@ class TestDVFeedback:
     def test_dv_potential_unbalanced(self, rng):
         """DV potential works with unbalanced coupling (lam-scaled c-transform)."""
         target = SimpleGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=8, n_iterations=1,
             coupling="unbalanced", rho=1.0,
             epsilon=0.5, alpha=0.05,
@@ -470,9 +470,9 @@ class TestDVFeedback:
         assert jnp.all(jnp.isfinite(new_state.dv_potential))
 
     def test_dv_potential_gibbs_is_zeros(self, rng):
-        """Gibbs coupling has no iterative solver → dv_potential is zeros."""
+        """Gibbs coupling has no iterative solver -> dv_potential is zeros."""
         target = SimpleGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=8, n_iterations=1,
             coupling="gibbs", epsilon=0.5, alpha=0.05,
             dv_feedback=True, dv_weight=1.0,
@@ -481,7 +481,7 @@ class TestDVFeedback:
         state = etd_init(k1, target, config)
         new_state, _ = etd_step(k2, state, target, config)
 
-        # Gibbs: g_tilde = zeros → dv_potential = 0*f + 1.0*zeros = zeros
+        # Gibbs: g_tilde = zeros -> dv_potential = 0*f + 1.0*zeros = zeros
         np.testing.assert_allclose(
             np.array(new_state.dv_potential), 0.0, atol=1e-6,
         )
@@ -492,76 +492,23 @@ class TestDVFeedback:
 # ===========================================================================
 
 class TestIntegration:
-    def test_mahalanobis_alias_warns(self):
-        """cost='mahalanobis' emits FutureWarning and runs as euclidean+whiten."""
-        target = SimpleGaussian(dim=3)
-        config = ETDConfig(
-            n_particles=10, n_proposals=5, n_iterations=1,
-            cost="mahalanobis", coupling="balanced",
-            precondition=True, epsilon=0.5, alpha=0.05,
-        )
-        key = jax.random.PRNGKey(0)
-        state = etd_init(key, target, config)
-
-        k1, k2 = jax.random.split(key)
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            new_state, info = etd_step(k2, state, target, config)
-            future_warnings = [x for x in w if issubclass(x.category, FutureWarning)]
-            assert len(future_warnings) >= 1
-            assert "deprecated" in str(future_warnings[0].message).lower()
-
-        assert new_state.positions.shape == (10, 3)
-        assert jnp.all(jnp.isfinite(new_state.positions))
-
-    def test_mahalanobis_alias_matches_euclidean_whiten(self, rng):
-        """cost='mahalanobis' should produce same result as euclidean+whiten."""
-        target = SimpleGaussian(dim=3)
-
-        config_maha = ETDConfig(
-            n_particles=10, n_proposals=5, n_iterations=1,
-            cost="mahalanobis", coupling="balanced",
-            precondition=True, epsilon=0.5, alpha=0.05,
-        )
-        config_whiten = ETDConfig(
-            n_particles=10, n_proposals=5, n_iterations=1,
-            cost="euclidean", coupling="balanced",
-            precondition=True, whiten=True,
-            epsilon=0.5, alpha=0.05,
-        )
-
-        k1, k2 = jax.random.split(rng)
-        state_maha = etd_init(k1, target, config_maha)
-        state_whiten = etd_init(k1, target, config_whiten)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            new_maha, _ = etd_step(k2, state_maha, target, config_maha)
-        new_whiten, _ = etd_step(k2, state_whiten, target, config_whiten)
-
-        np.testing.assert_allclose(
-            np.array(new_maha.positions),
-            np.array(new_whiten.positions),
-            atol=1e-5,
-        )
-
-    @pytest.mark.parametrize("cost_name,precondition,whiten", [
-        ("euclidean", False, False),
-        ("euclidean", True, True),   # whitened euclidean
-        ("linf", False, False),
-        ("linf", False, True),       # whitened linf
-        ("imq", False, False),
-        ("imq", False, True),        # whitened imq
+    @pytest.mark.parametrize("cost_name,preconditioner", [
+        ("euclidean", PreconditionerConfig()),                                    # no precond
+        ("euclidean", PreconditionerConfig(type="rmsprop", proposals=True, cost=True)),  # whitened
+        ("linf", PreconditionerConfig()),                                         # no precond
+        ("linf", PreconditionerConfig(type="rmsprop", cost=True)),                # whitened
+        ("imq", PreconditionerConfig()),                                          # no precond
+        ("imq", PreconditionerConfig(type="rmsprop", cost=True)),                 # whitened
     ])
-    def test_step_with_each_cost(self, rng, cost_name, precondition, whiten):
+    def test_step_with_each_cost(self, rng, cost_name, preconditioner):
         """Smoke test: one ETD step with each cost variant."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost=cost_name, coupling="balanced",
             cost_params=(("c", 1.0),) if cost_name == "imq" else (),
-            precondition=precondition, whiten=whiten,
             epsilon=0.5, alpha=0.05,
+            preconditioner=preconditioner,
         )
 
         k1, k2 = jax.random.split(rng)
@@ -576,7 +523,7 @@ class TestIntegration:
     def test_step_with_unbalanced_coupling(self, rng):
         """Smoke test: one ETD step with unbalanced coupling."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="euclidean", coupling="unbalanced",
             rho=1.0, epsilon=0.5, alpha=0.05,
@@ -593,7 +540,7 @@ class TestIntegration:
     def test_step_with_dv_feedback(self, rng):
         """Smoke test: ETD step with DV feedback enabled."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="euclidean", coupling="balanced",
             dv_feedback=True, dv_weight=1.0,
@@ -610,7 +557,7 @@ class TestIntegration:
     def test_coupling_ess_in_info(self, rng):
         """Coupling ESS should be a finite positive scalar."""
         target = SimpleGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=10, n_proposals=5, n_iterations=1,
             coupling="balanced", epsilon=0.5, alpha=0.05,
         )
@@ -641,7 +588,7 @@ class TestIntegration:
     def test_step_with_imq(self, rng):
         """Smoke test: one ETD step with IMQ cost."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="imq", cost_params=(("c", 1.0),),
             coupling="balanced", epsilon=0.5, alpha=0.05,
@@ -662,7 +609,7 @@ class TestIntegration:
 
 class TestIMQCost:
     def test_known_value(self):
-        """C(0, [3,4]) with c=1 → sqrt(1 + 25) - 1 = sqrt(26) - 1."""
+        """C(0, [3,4]) with c=1 -> sqrt(1 + 25) - 1 = sqrt(26) - 1."""
         x = jnp.array([[0.0, 0.0]])   # (1, 2)
         y = jnp.array([[3.0, 4.0]])    # (1, 2)
 
@@ -685,22 +632,22 @@ class TestIMQCost:
     def test_sublinear(self, positions_proposals):
         """For large distances, IMQ < squared Euclidean.
 
-        sqrt(c² + r²) - c < r²/2 for large r, since IMQ is O(r) while
-        squared Euclidean is O(r²).
+        sqrt(c^2 + r^2) - c < r^2/2 for large r, since IMQ is O(r) while
+        squared Euclidean is O(r^2).
         """
         positions, proposals = positions_proposals
         C_imq = imq_cost(positions, proposals, c=1.0)
         C_euc = squared_euclidean_cost(positions, proposals)
 
-        # IMQ grows as ~r (sub-linear) vs r²/2 → strictly less for all r > 0
-        # (actually sqrt(c² + r²) - c ≤ r for all r ≥ 0, and r < r²/2 for r > 2)
+        # IMQ grows as ~r (sub-linear) vs r^2/2 -> strictly less for all r > 0
+        # (actually sqrt(c^2 + r^2) - c <= r for all r >= 0, and r < r^2/2 for r > 2)
         # Filter to entries where squared distance > 4 (i.e., r > 2)
-        large_mask = C_euc > 2.0  # r² > 4 → r > 2
+        large_mask = C_euc > 2.0  # r^2 > 4 -> r > 2
         if jnp.any(large_mask):
             assert jnp.all(C_imq[large_mask] < C_euc[large_mask])
 
     def test_reduces_to_l2_norm_as_c_to_zero(self, positions_proposals):
-        """As c → 0, IMQ → ||x - y||₂ = sqrt(2 * C_euc)."""
+        """As c -> 0, IMQ -> ||x - y||_2 = sqrt(2 * C_euc)."""
         positions, proposals = positions_proposals
         C_imq = imq_cost(positions, proposals, c=1e-8)
         C_euc = squared_euclidean_cost(positions, proposals)
@@ -747,23 +694,17 @@ class TestBuildCostFn:
         with pytest.raises(KeyError, match="Unknown cost"):
             build_cost_fn("nonexistent")
 
-    def test_yaml_string_cost(self):
-        """String-form cost in ETDConfig works (backward compat)."""
-        config = ETDConfig(cost="euclidean")
-        assert config.cost == "euclidean"
-        assert config.cost_params == ()
+    def test_nested_cost_config(self):
+        """CostConfig correctly stores type and params."""
+        config = make_test_config(cost="euclidean")
+        assert config.cost.type == "euclidean"
+        assert config.cost.params == ()
 
-    def test_yaml_mapping_cost(self):
-        """Dict-style cost parses to cost + cost_params correctly."""
-        # Simulate what run.py does when it sees cost: {type: imq, c: 1.0}
-        raw_cost = {"type": "imq", "c": 1.0}
-        raw_cost_copy = dict(raw_cost)
-        cost_name = raw_cost_copy.pop("type")
-        cost_params = tuple(sorted(raw_cost_copy.items()))
-
-        config = ETDConfig(cost=cost_name, cost_params=cost_params)
-        assert config.cost == "imq"
-        assert config.cost_params == (("c", 1.0),)
+    def test_nested_cost_config_with_params(self):
+        """CostConfig correctly stores type and params for imq."""
+        config = make_test_config(cost="imq", cost_params=(("c", 1.0),))
+        assert config.cost.type == "imq"
+        assert config.cost.params == (("c", 1.0),)
 
 
 # ===========================================================================
@@ -772,19 +713,19 @@ class TestBuildCostFn:
 
 class TestWhitenedLinfCost:
     def test_whitened_known_value(self):
-        """Hand-computed whitened L∞: max_k |Δ_k / P_k|."""
+        """Hand-computed whitened L-inf: max_k |delta_k / P_k|."""
         x = jnp.array([[1.0, 2.0, 3.0]])   # (1, 3)
         y = jnp.array([[4.0, 4.0, 7.0]])    # (1, 3)
         P = jnp.array([1.0, 0.5, 2.0])      # preconditioner
 
-        # Δ = [3, 2, 4], 1/P = [1, 2, 0.5]
-        # whitened Δ = [3*1, 2*2, 4*0.5] = [3, 4, 2]
+        # delta = [3, 2, 4], 1/P = [1, 2, 0.5]
+        # whitened delta = [3*1, 2*2, 4*0.5] = [3, 4, 2]
         # max = 4.0
         C = linf_cost(x, y, preconditioner=P)
         np.testing.assert_allclose(float(C[0, 0]), 4.0, atol=1e-5)
 
     def test_whitened_identity_matches_unwhitened(self, positions_proposals):
-        """P=ones → whitened L∞ == unwhitened L∞."""
+        """P=ones -> whitened L-inf == unwhitened L-inf."""
         positions, proposals = positions_proposals
         P = jnp.ones(positions.shape[1])
 
@@ -798,19 +739,19 @@ class TestWhitenedLinfCost:
 
 class TestWhitenedIMQCost:
     def test_whitened_known_value(self):
-        """Hand-computed whitened IMQ: sqrt(c² + ||P⁻¹Δ||²) - c."""
+        """Hand-computed whitened IMQ: sqrt(c^2 + ||P^{-1} delta||^2) - c."""
         x = jnp.array([[0.0, 0.0]])   # (1, 2)
         y = jnp.array([[3.0, 4.0]])    # (1, 2)
         P = jnp.array([0.5, 1.0])      # preconditioner
 
-        # 1/P = [2, 1], whitened: [6, 4], ||·||² = 52
+        # 1/P = [2, 1], whitened: [6, 4], ||.||^2 = 52
         # sqrt(1 + 52) - 1 = sqrt(53) - 1
         C = imq_cost(x, y, preconditioner=P, c=1.0)
         expected = jnp.sqrt(53.0) - 1.0
         np.testing.assert_allclose(float(C[0, 0]), float(expected), atol=1e-5)
 
     def test_whitened_identity_matches_unwhitened(self, positions_proposals):
-        """P=ones → whitened IMQ == unwhitened IMQ."""
+        """P=ones -> whitened IMQ == unwhitened IMQ."""
         positions, proposals = positions_proposals
         P = jnp.ones(positions.shape[1])
 
@@ -838,7 +779,7 @@ class TestWhitenedEuclideanCost:
         )
 
     def test_whitened_identity_matches_unwhitened(self, positions_proposals):
-        """P=ones → whitened euclidean == unwhitened euclidean."""
+        """P=ones -> whitened euclidean == unwhitened euclidean."""
         positions, proposals = positions_proposals
         P = jnp.ones(positions.shape[1])
 
@@ -853,25 +794,31 @@ class TestWhitenedEuclideanCost:
 
 
 # ===========================================================================
-# Whiten Config Integration Tests
+# Preconditioner Config Integration Tests
 # ===========================================================================
 
-class TestWhitenConfig:
+class TestPreconditionerConfig:
     def test_needs_precond_accum(self):
-        """needs_precond_accum reflects precondition OR whiten."""
-        assert not ETDConfig().needs_precond_accum
-        assert ETDConfig(precondition=True).needs_precond_accum
-        assert ETDConfig(whiten=True).needs_precond_accum
-        assert ETDConfig(precondition=True, whiten=True).needs_precond_accum
+        """needs_precond_accum reflects preconditioner.active."""
+        assert not make_test_config().needs_precond_accum
+        assert make_test_config(
+            preconditioner=PreconditionerConfig(type="rmsprop"),
+        ).needs_precond_accum
+        assert make_test_config(
+            preconditioner=PreconditionerConfig(type="rmsprop", cost=True),
+        ).needs_precond_accum
+        assert make_test_config(
+            preconditioner=PreconditionerConfig(type="rmsprop", proposals=True, cost=True),
+        ).needs_precond_accum
 
-    def test_whiten_without_precondition(self, rng):
-        """whiten=True, precondition=False: accumulator updated, cost whitened."""
+    def test_cost_whitening_only(self, rng):
+        """preconditioner with cost=True only: accumulator updated, cost whitened."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="euclidean", coupling="balanced",
-            precondition=False, whiten=True,
             epsilon=0.5, alpha=0.05,
+            preconditioner=PreconditionerConfig(type="rmsprop", cost=True),
         )
 
         k1, k2 = jax.random.split(rng)
@@ -883,14 +830,14 @@ class TestWhitenConfig:
         # Accumulator should have been updated from ones
         assert not jnp.allclose(new_state.precond_accum, jnp.ones(4))
 
-    def test_precondition_without_whiten(self, rng):
-        """precondition=True, whiten=False: proposals preconditioned, cost isotropic."""
+    def test_proposals_only(self, rng):
+        """preconditioner with proposals=True only: proposals preconditioned, cost isotropic."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="euclidean", coupling="balanced",
-            precondition=True, whiten=False,
             epsilon=0.5, alpha=0.05,
+            preconditioner=PreconditionerConfig(type="rmsprop", proposals=True),
         )
 
         k1, k2 = jax.random.split(rng)
@@ -903,13 +850,15 @@ class TestWhitenConfig:
         assert not jnp.allclose(new_state.precond_accum, jnp.ones(4))
 
     def test_step_linf_whitened(self, rng):
-        """Smoke test: ETD step with L∞ + whiten + precondition."""
+        """Smoke test: ETD step with L-inf + cost whitening via preconditioner."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="linf", coupling="balanced",
-            precondition=True, whiten=True,
             epsilon=0.5, alpha=0.05,
+            preconditioner=PreconditionerConfig(
+                type="rmsprop", proposals=True, cost=True,
+            ),
         )
 
         k1, k2 = jax.random.split(rng)
@@ -920,14 +869,16 @@ class TestWhitenConfig:
         assert jnp.all(jnp.isfinite(new_state.positions))
 
     def test_step_imq_whitened(self, rng):
-        """Smoke test: ETD step with IMQ + whiten + precondition."""
+        """Smoke test: ETD step with IMQ + cost whitening via preconditioner."""
         target = SimpleGaussian(dim=4)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=15, n_proposals=10, n_iterations=1,
             cost="imq", cost_params=(("c", 1.0),),
             coupling="balanced",
-            precondition=True, whiten=True,
             epsilon=0.5, alpha=0.05,
+            preconditioner=PreconditionerConfig(
+                type="rmsprop", proposals=True, cost=True,
+            ),
         )
 
         k1, k2 = jax.random.split(rng)

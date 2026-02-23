@@ -20,8 +20,9 @@ from etd.costs.euclidean import squared_euclidean_cost
 from etd.costs.imq import imq_cost
 from etd.costs.linf import linf_cost
 from etd.step import init as etd_init, step as etd_step
-from etd.types import ETDConfig, PreconditionerConfig
 from etd.weights import _log_proposal_density, importance_weights
+
+from conftest import make_test_config
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +87,7 @@ class TestComputeEnsembleCholesky:
         ])
         data = _sample_correlated(key, 5000, d, true_cov)
         config = PreconditionerConfig(
-            type="cholesky", shrinkage=0.0, jitter=0.0, ema_beta=0.0,
+            type="cholesky", shrinkage=0.0, jitter=0.0, ema=0.0,
         )
         L = compute_ensemble_cholesky(data, jnp.eye(d), config)
         recovered_cov = L @ L.T
@@ -98,7 +99,7 @@ class TestComputeEnsembleCholesky:
         d = 4
         data = jax.random.normal(key, (200, d))
         config = PreconditionerConfig(
-            type="cholesky", shrinkage=1.0, jitter=1e-6, ema_beta=0.0,
+            type="cholesky", shrinkage=1.0, jitter=1e-6, ema=0.0,
         )
         L = compute_ensemble_cholesky(data, jnp.eye(d), config)
         # Off-diagonal should be ~0
@@ -106,21 +107,21 @@ class TestComputeEnsembleCholesky:
         assert jnp.max(jnp.abs(off_diag)) < 1e-4
 
     def test_ema_zero_ignores_prev(self):
-        """ema_beta=0.0 should ignore the previous L entirely."""
+        """ema=0.0 should ignore the previous L entirely."""
         key = jax.random.key(2)
         d = 3
         data = jax.random.normal(key, (100, d))
         prev_L = 10.0 * jnp.eye(d)  # very different scale
 
         config = PreconditionerConfig(
-            type="cholesky", shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+            type="cholesky", shrinkage=0.1, jitter=1e-6, ema=0.0,
         )
         L = compute_ensemble_cholesky(data, prev_L, config)
         # L should not be anywhere near 10*I
         assert jnp.max(jnp.abs(jnp.diag(L))) < 5.0
 
     def test_ema_blends_previous(self):
-        """ema_beta=0.9 should heavily weight the previous covariance."""
+        """ema=0.9 should heavily weight the previous covariance."""
         key = jax.random.key(3)
         d = 2
         data = jax.random.normal(key, (100, d)) * 0.1  # small variance data
@@ -129,10 +130,10 @@ class TestComputeEnsembleCholesky:
         prev_L = 5.0 * jnp.eye(d)
 
         config_no_ema = PreconditionerConfig(
-            type="cholesky", shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+            type="cholesky", shrinkage=0.1, jitter=1e-6, ema=0.0,
         )
         config_ema = PreconditionerConfig(
-            type="cholesky", shrinkage=0.1, jitter=1e-6, ema_beta=0.9,
+            type="cholesky", shrinkage=0.1, jitter=1e-6, ema=0.9,
         )
         L_fresh = compute_ensemble_cholesky(data, prev_L, config_no_ema)
         L_ema = compute_ensemble_cholesky(data, prev_L, config_ema)
@@ -146,7 +147,7 @@ class TestComputeEnsembleCholesky:
         d = 5
         data = jax.random.normal(key, (100, d))
         config = PreconditionerConfig(
-            type="cholesky", shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+            type="cholesky", shrinkage=0.1, jitter=1e-6, ema=0.0,
         )
         L = compute_ensemble_cholesky(data, jnp.eye(d), config)
         # Upper triangle (above diagonal) should be zero
@@ -159,7 +160,7 @@ class TestComputeEnsembleCholesky:
         d = 4
         data = jax.random.normal(key, (100, d))
         config = PreconditionerConfig(
-            type="cholesky", shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+            type="cholesky", shrinkage=0.1, jitter=1e-6, ema=0.0,
         )
         L = compute_ensemble_cholesky(data, jnp.eye(d), config)
         assert jnp.all(jnp.diag(L) > 0)
@@ -167,9 +168,9 @@ class TestComputeEnsembleCholesky:
     def test_jitter_prevents_singularity(self):
         """Degenerate input (constant) should still produce valid L."""
         d = 3
-        data = jnp.ones((50, d))  # rank-0 — Σ_hat = 0
+        data = jnp.ones((50, d))  # rank-0 — Sigma_hat = 0
         config = PreconditionerConfig(
-            type="cholesky", shrinkage=0.0, jitter=1e-4, ema_beta=0.0,
+            type="cholesky", shrinkage=0.0, jitter=1e-4, ema=0.0,
         )
         L = compute_ensemble_cholesky(data, jnp.eye(d), config)
         # Should get sqrt(jitter) * I
@@ -182,7 +183,7 @@ class TestComputeEnsembleCholesky:
         for d in [2, 5, 10]:
             data = jax.random.normal(key, (100, d))
             config = PreconditionerConfig(
-                type="cholesky", shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+                type="cholesky", shrinkage=0.1, jitter=1e-6, ema=0.0,
             )
             L = compute_ensemble_cholesky(data, jnp.eye(d), config)
             assert L.shape == (d, d)
@@ -275,11 +276,11 @@ class TestCholeskyProposals:
             n_proposals=M, precondition=True,
             precond_accum=accum, precond_delta=0.0,
         )
-        # Cholesky with L = diag(P): Σ = L@L.T = diag(P²)
-        # Drift: x + α*(L@L.T)@s = x + α*diag(P²)@s
-        # But diagonal: x + α*P*s (element-wise, P is 1-D)
-        # So drift_chol = x + α * P² * s, drift_diag = x + α * P * s
-        # These are different — the diagonal path uses P, not P².
+        # Cholesky with L = diag(P): Sigma = L@L.T = diag(P^2)
+        # Drift: x + alpha*(L@L.T)@s = x + alpha*diag(P^2)@s
+        # But diagonal: x + alpha*P*s (element-wise, P is 1-D)
+        # So drift_chol = x + alpha * P^2 * s, drift_diag = x + alpha * P * s
+        # These are different -- the diagonal path uses P, not P^2.
         # Instead verify shapes and sanity.
         L = jnp.diag(P)
         _, means_chol, _ = langevin_proposals(
@@ -364,7 +365,7 @@ class TestCholeskyISDensity:
         log_b = importance_weights(
             proposals, means, target, sigma=sigma, cholesky_factor=L,
         )
-        # Should be normalized: logsumexp ≈ 0
+        # Should be normalized: logsumexp ~ 0
         from jax.scipy.special import logsumexp
         npt.assert_allclose(logsumexp(log_b), 0.0, atol=1e-5)
         assert jnp.all(jnp.isfinite(log_b))
@@ -466,7 +467,7 @@ class TestCholeskyStepIntegration:
     def test_cholesky_step_runs(self):
         """ETD step with Cholesky preconditioner should run without error."""
         target = _IsotropicGaussian(dim=2)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20, n_iterations=5, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -481,7 +482,7 @@ class TestCholeskyStepIntegration:
     def test_cholesky_factor_initialized_from_data(self):
         """Cholesky factor should be computed from init particles, not eye(d)."""
         target = _IsotropicGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=30, n_iterations=5, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -510,7 +511,7 @@ class TestCholeskyStepIntegration:
     def test_cholesky_higher_dim(self):
         """Cholesky should work for d=10."""
         target = _IsotropicGaussian(dim=10)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=50, n_iterations=3, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -526,11 +527,11 @@ class TestCholeskyStepIntegration:
         """source='positions' and 'scores' should give different L.
 
         For an anisotropic Gaussian, Cov(x) != Cov(score(x)) because
-        score = -Σ⁻¹ x, so Cov(score) = Σ⁻¹ Cov(x) Σ⁻¹ = Σ⁻¹.
+        score = -Sigma^{-1} x, so Cov(score) = Sigma^{-1} Cov(x) Sigma^{-1} = Sigma^{-1}.
         """
         # Use an anisotropic target so Cov(scores) != Cov(positions)
         target = _AnisotropicGaussian(dim=2, scales=jnp.array([0.1, 10.0]))
-        config_scores = ETDConfig(
+        config_scores = make_test_config(
             n_particles=50, n_iterations=5, n_proposals=5,
             use_score=True, alpha=0.01, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -538,7 +539,7 @@ class TestCholeskyStepIntegration:
                 source="scores", shrinkage=0.1, jitter=1e-6,
             ),
         )
-        config_positions = ETDConfig(
+        config_positions = make_test_config(
             n_particles=50, n_iterations=5, n_proposals=5,
             use_score=True, alpha=0.01, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -548,27 +549,14 @@ class TestCholeskyStepIntegration:
         )
         state_s, _ = self._run_steps(config_scores, target, n_steps=5)
         state_p, _ = self._run_steps(config_positions, target, n_steps=5)
-        # Different data sources → different L
+        # Different data sources -> different L
         diff = jnp.max(jnp.abs(state_s.cholesky_factor - state_p.cholesky_factor))
         assert diff > 1e-3
-
-    def test_legacy_rmsprop_still_works(self):
-        """Legacy flat fields should still work when preconditioner is default."""
-        target = _IsotropicGaussian(dim=2)
-        config = ETDConfig(
-            n_particles=20, n_iterations=3, n_proposals=5,
-            use_score=True, alpha=0.05, epsilon=0.1,
-            precondition=True, whiten=True,
-        )
-        state, _ = self._run_steps(config, target, n_steps=3)
-        assert jnp.all(jnp.isfinite(state.positions))
-        # precond_accum should have been updated (not all ones)
-        assert not jnp.allclose(state.precond_accum, jnp.ones(2))
 
     def test_no_precond_cholesky_unchanged(self):
         """With type='none', cholesky_factor stays at eye(d)."""
         target = _IsotropicGaussian(dim=2)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20, n_iterations=3, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
         )
@@ -591,11 +579,11 @@ class TestCholeskyConvergence:
         target = _AnisotropicGaussian(dim=2, scales=jnp.array([0.1, 10.0]))
         n_steps = 200
 
-        config_iso = ETDConfig(
+        config_iso = make_test_config(
             n_particles=100, n_iterations=n_steps, n_proposals=10,
             use_score=True, alpha=0.01, epsilon=0.1,
         )
-        config_chol = ETDConfig(
+        config_chol = make_test_config(
             n_particles=100, n_iterations=n_steps, n_proposals=10,
             use_score=True, alpha=0.01, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -628,11 +616,11 @@ class TestCholeskyConvergence:
         target = _IsotropicGaussian(dim=3)
         n_steps = 100
 
-        config_iso = ETDConfig(
+        config_iso = make_test_config(
             n_particles=50, n_iterations=n_steps, n_proposals=10,
             use_score=True, alpha=0.05, epsilon=0.1,
         )
-        config_chol = ETDConfig(
+        config_chol = make_test_config(
             n_particles=50, n_iterations=n_steps, n_proposals=10,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -663,7 +651,7 @@ class TestCholeskyConvergence:
         target = _AnisotropicGaussian(dim=2, scales=jnp.array([0.5, 2.0]))
         n_steps = 100
 
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=100, n_iterations=n_steps, n_proposals=10,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -688,20 +676,20 @@ class TestCholeskyConvergence:
         """EMA should produce smoother L evolution than fresh."""
         target = _IsotropicGaussian(dim=2)
 
-        config_fresh = ETDConfig(
+        config_fresh = make_test_config(
             n_particles=30, n_iterations=20, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
                 type="cholesky", proposals=True, cost=False,
-                shrinkage=0.1, jitter=1e-6, ema_beta=0.0,
+                shrinkage=0.1, jitter=1e-6, ema=0.0,
             ),
         )
-        config_ema = ETDConfig(
+        config_ema = make_test_config(
             n_particles=30, n_iterations=20, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
                 type="cholesky", proposals=True, cost=False,
-                shrinkage=0.1, jitter=1e-6, ema_beta=0.9,
+                shrinkage=0.1, jitter=1e-6, ema=0.9,
             ),
         )
 
@@ -733,7 +721,7 @@ class TestCholeskyConvergence:
     def test_shrinkage_one_diagonal_factor(self):
         """shrinkage=1.0 should produce approximately diagonal L."""
         target = _IsotropicGaussian(dim=3)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=50, n_iterations=10, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(
@@ -756,15 +744,24 @@ class TestCholeskyConvergence:
         """State pytree structure should be identical across preconditioner types."""
         target = _IsotropicGaussian(dim=2)
         configs = [
-            ETDConfig(n_particles=10, n_proposals=3, use_score=True,
-                      alpha=0.05, epsilon=0.1),
-            ETDConfig(n_particles=10, n_proposals=3, use_score=True,
-                      alpha=0.05, epsilon=0.1, precondition=True),
-            ETDConfig(n_particles=10, n_proposals=3, use_score=True,
-                      alpha=0.05, epsilon=0.1,
-                      preconditioner=PreconditionerConfig(
-                          type="cholesky", proposals=True, cost=True,
-                      )),
+            make_test_config(
+                n_particles=10, n_proposals=3, use_score=True,
+                alpha=0.05, epsilon=0.1,
+            ),
+            make_test_config(
+                n_particles=10, n_proposals=3, use_score=True,
+                alpha=0.05, epsilon=0.1,
+                preconditioner=PreconditionerConfig(
+                    type="rmsprop", proposals=True,
+                ),
+            ),
+            make_test_config(
+                n_particles=10, n_proposals=3, use_score=True,
+                alpha=0.05, epsilon=0.1,
+                preconditioner=PreconditionerConfig(
+                    type="cholesky", proposals=True, cost=True,
+                ),
+            ),
         ]
         key = jax.random.key(205)
         for config in configs:
@@ -780,7 +777,7 @@ class TestCholeskyConvergence:
     def test_jit_compiles_cholesky(self):
         """JIT should compile cleanly with Cholesky config."""
         target = _IsotropicGaussian(dim=2)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20, n_iterations=3, n_proposals=5,
             use_score=True, alpha=0.05, epsilon=0.1,
             preconditioner=PreconditionerConfig(

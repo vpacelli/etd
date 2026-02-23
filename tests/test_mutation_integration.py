@@ -9,9 +9,11 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from etd.extensions.sdd import SDDConfig, init as sdd_init, step as sdd_step
+from conftest import make_test_config, make_test_sdd_config
+
+from etd.extensions.sdd import init as sdd_init, step as sdd_step
 from etd.step import init as etd_init, step as etd_step
-from etd.types import ETDConfig, MutationConfig, PreconditionerConfig
+from etd.types import MutationConfig, PreconditionerConfig
 from etd.targets.gaussian import GaussianTarget
 
 
@@ -41,7 +43,7 @@ class TestNoDegradation:
         key = jax.random.PRNGKey(100)
 
         # ETD without mutation
-        cfg_plain = ETDConfig(
+        cfg_plain = make_test_config(
             n_particles=100, n_iterations=200, n_proposals=25,
             coupling="balanced", epsilon=0.1, alpha=0.05,
         )
@@ -51,8 +53,8 @@ class TestNoDegradation:
         )))
 
         # ETD with MALA mutation
-        mut = MutationConfig(kernel="mala", n_steps=3, step_size=0.01)
-        cfg_mut = ETDConfig(
+        mut = MutationConfig(kernel="mala", steps=3, stepsize=0.01)
+        cfg_mut = make_test_config(
             n_particles=100, n_iterations=200, n_proposals=25,
             coupling="balanced", epsilon=0.1, alpha=0.05,
             mutation=mut,
@@ -83,8 +85,8 @@ class TestAnisotropicImprovement:
         pc = PreconditionerConfig(
             type="cholesky", proposals=True, cost=True, shrinkage=0.1,
         )
-        mut = MutationConfig(kernel="mala", n_steps=5, step_size=0.01)
-        cfg = ETDConfig(
+        mut = MutationConfig(kernel="mala", steps=5, stepsize=0.01)
+        cfg = make_test_config(
             n_particles=100, n_iterations=300, n_proposals=25,
             coupling="balanced", epsilon=0.1, alpha=0.05,
             preconditioner=pc, mutation=mut,
@@ -114,9 +116,9 @@ class TestScoreFreeRWM:
         key = jax.random.PRNGKey(300)
 
         mut = MutationConfig(
-            kernel="rwm", n_steps=5, step_size=0.1, use_cholesky=False,
+            kernel="rwm", steps=5, stepsize=0.1, cholesky=False,
         )
-        cfg = ETDConfig(
+        cfg = make_test_config(
             n_particles=100, n_iterations=300, n_proposals=25,
             coupling="balanced", epsilon=0.1, alpha=0.05,
             use_score=False, mutation=mut,
@@ -138,8 +140,8 @@ class TestSDDMutation:
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(400)
 
-        mut = MutationConfig(kernel="mala", n_steps=3, step_size=0.01)
-        cfg = SDDConfig(
+        mut = MutationConfig(kernel="mala", steps=3, stepsize=0.01)
+        cfg = make_test_sdd_config(
             n_particles=50, n_iterations=200, n_proposals=15,
             epsilon=0.1, alpha=0.05, mutation=mut,
         )
@@ -166,8 +168,8 @@ class TestAcceptanceRate:
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(500)
 
-        mut = MutationConfig(kernel="mala", n_steps=5, step_size=0.01)
-        cfg = ETDConfig(
+        mut = MutationConfig(kernel="mala", steps=5, stepsize=0.01)
+        cfg = make_test_config(
             n_particles=100, n_iterations=50, n_proposals=25,
             coupling="balanced", epsilon=0.1, alpha=0.05,
             mutation=mut,
@@ -193,9 +195,9 @@ class TestJITCompatibility:
         key = jax.random.PRNGKey(600)
 
         mut = MutationConfig(
-            kernel="mala", n_steps=3, step_size=0.01, use_cholesky=False,
+            kernel="mala", steps=3, stepsize=0.01, cholesky=False,
         )
-        cfg = ETDConfig(
+        cfg = make_test_config(
             n_particles=30, n_iterations=10, n_proposals=10,
             coupling="balanced", epsilon=0.1, alpha=0.05,
             mutation=mut,
@@ -223,9 +225,9 @@ class TestJITCompatibility:
         key = jax.random.PRNGKey(700)
 
         mut = MutationConfig(
-            kernel="mala", n_steps=3, step_size=0.01, use_cholesky=False,
+            kernel="mala", steps=3, stepsize=0.01, cholesky=False,
         )
-        cfg = ETDConfig(
+        cfg = make_test_config(
             n_particles=20, n_iterations=10, n_proposals=10,
             coupling="balanced", epsilon=0.1, alpha=0.05,
             mutation=mut,

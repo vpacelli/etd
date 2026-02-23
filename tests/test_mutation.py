@@ -9,10 +9,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from conftest import make_test_config, make_test_sdd_config
+
 from etd.primitives.mutation import mala_kernel, mutate, rwm_kernel
-from etd.extensions.sdd import SDDConfig, init as sdd_init, step as sdd_step
+from etd.extensions.sdd import init as sdd_init, step as sdd_step
 from etd.step import init as etd_init, step as etd_step
-from etd.types import ETDConfig, MutationConfig
+from etd.types import MutationConfig
 from etd.targets.gaussian import GaussianTarget
 
 
@@ -211,7 +213,7 @@ class TestMutate:
     def test_mala_5_steps(self, gaussian_target, key):
         N, d = 50, 4
         x = gaussian_target.sample(key, N)
-        cfg = MutationConfig(kernel="mala", n_steps=5, step_size=0.01)
+        cfg = MutationConfig(kernel="mala", steps=5, stepsize=0.01)
 
         new_pos, new_lp, new_s, info = mutate(
             key, x, gaussian_target, cfg, score_clip=5.0,
@@ -227,7 +229,7 @@ class TestMutate:
     def test_rwm_5_steps(self, gaussian_target, key):
         N, d = 50, 4
         x = gaussian_target.sample(key, N)
-        cfg = MutationConfig(kernel="rwm", n_steps=5, step_size=0.01)
+        cfg = MutationConfig(kernel="rwm", steps=5, stepsize=0.01)
 
         new_pos, new_lp, new_s, info = mutate(
             key, x, gaussian_target, cfg, score_clip=5.0,
@@ -244,7 +246,7 @@ class TestMutate:
     def test_all_finite(self, gaussian_target, key):
         N, d = 50, 4
         x = gaussian_target.sample(key, N)
-        cfg = MutationConfig(kernel="mala", n_steps=5, step_size=0.01)
+        cfg = MutationConfig(kernel="mala", steps=5, stepsize=0.01)
 
         new_pos, new_lp, new_s, info = mutate(
             key, x, gaussian_target, cfg, score_clip=5.0,
@@ -278,7 +280,7 @@ class TestCholeskyBenefit:
         L_true = jnp.diag(jnp.sqrt(target.variance))
 
         # --- Identity MALA: many steps ---
-        cfg = MutationConfig(kernel="mala", n_steps=20, step_size=h)
+        cfg = MutationConfig(kernel="mala", steps=20, stepsize=h)
         _, _, _, info_iso = mutate(
             k_iso, x, target, cfg,
             cholesky_factor=None, score_clip=5.0,
@@ -310,8 +312,8 @@ class TestETDMutation:
     def test_etd_with_mala_mutation(self):
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(0)
-        mut = MutationConfig(kernel="mala", n_steps=3, step_size=0.01)
-        cfg = ETDConfig(
+        mut = MutationConfig(kernel="mala", steps=3, stepsize=0.01)
+        cfg = make_test_config(
             n_particles=30, n_iterations=10, n_proposals=10,
             mutation=mut,
         )
@@ -333,8 +335,8 @@ class TestETDMutation:
     def test_etd_with_rwm_mutation(self):
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(1)
-        mut = MutationConfig(kernel="rwm", n_steps=3, step_size=0.01)
-        cfg = ETDConfig(
+        mut = MutationConfig(kernel="rwm", steps=3, stepsize=0.01)
+        cfg = make_test_config(
             n_particles=30, n_iterations=10, n_proposals=10,
             mutation=mut,
         )
@@ -353,7 +355,7 @@ class TestETDMutation:
         """Default MutationConfig → log_prob/scores are zeros."""
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(2)
-        cfg = ETDConfig(
+        cfg = make_test_config(
             n_particles=30, n_iterations=10, n_proposals=10,
         )
         k_init, k_run = jax.random.split(key)
@@ -377,8 +379,8 @@ class TestSDDMutation:
     def test_sdd_with_mala_mutation(self):
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(10)
-        mut = MutationConfig(kernel="mala", n_steps=3, step_size=0.01)
-        cfg = SDDConfig(
+        mut = MutationConfig(kernel="mala", steps=3, stepsize=0.01)
+        cfg = make_test_sdd_config(
             n_particles=30, n_iterations=10, n_proposals=10,
             mutation=mut,
         )
@@ -399,7 +401,7 @@ class TestSDDMutation:
         """Default MutationConfig → log_prob/scores are zeros."""
         target = GaussianTarget(dim=2)
         key = jax.random.PRNGKey(11)
-        cfg = SDDConfig(
+        cfg = make_test_sdd_config(
             n_particles=30, n_iterations=10, n_proposals=10,
         )
         k_init, k_run = jax.random.split(key)

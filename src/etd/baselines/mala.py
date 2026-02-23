@@ -11,11 +11,11 @@ This eliminates ULA's O(h) discretization bias at the cost of
 occasional rejections.  An optional RMSProp preconditioner scales
 both drift and noise by P = 1/sqrt(G + delta).
 
-When ``use_cholesky=True``, a full Cholesky-preconditioned MALA is used
-instead, delegating to :func:`etd.primitives.mutation.mala_kernel`.
+When ``preconditioner.is_cholesky`` is True, a full Cholesky-preconditioned
+MALA is used instead, delegating to :func:`etd.primitives.mutation.mala_kernel`.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple, NamedTuple
 
 import jax
@@ -38,27 +38,17 @@ class MALAConfig:
     Attributes:
         n_particles: Number of particles (*N*).
         n_iterations: Total iterations.
-        step_size: Langevin step size (*h*).
-        score_clip: Maximum score norm (default 5.0).
-        precondition: Whether to apply diagonal preconditioner.
-        precond_beta: EMA decay for RMSProp accumulator.
-        precond_delta: Regularization for preconditioner.
-        use_cholesky: Whether to use full Cholesky preconditioning.
-        cholesky_shrinkage: Ledoit-Wolf shrinkage for Cholesky.
-        cholesky_jitter: Diagonal jitter for PD guarantee.
-        cholesky_ema_beta: EMA on covariance (0.0 = fresh each step).
+        stepsize: Langevin step size (*h*).
+        clip_score: Maximum score norm (default 5.0).
+        preconditioner: Preconditioner config (diagonal RMSProp or Cholesky).
     """
     n_particles: int = 100
     n_iterations: int = 500
-    step_size: float = 0.01
-    score_clip: float = 5.0
-    precondition: bool = False
-    precond_beta: float = 0.9
-    precond_delta: float = 1e-8
-    use_cholesky: bool = False
-    cholesky_shrinkage: float = 0.1
-    cholesky_jitter: float = 1e-6
-    cholesky_ema_beta: float = 0.0
+    stepsize: float = 0.01
+    clip_score: float = 5.0
+    preconditioner: PreconditionerConfig = field(
+        default_factory=PreconditionerConfig,
+    )
 
 
 class MALAState(NamedTuple):
@@ -112,18 +102,13 @@ def init(
 
     d = positions.shape[-1]
     log_p = target.log_prob(positions)                         # (N,)
-    scores = clip_scores(target.score(positions), config.score_clip)  # (N, d)
+    scores = clip_scores(target.score(positions), config.clip_score)  # (N, d)
     precond_accum = jnp.ones(d)                                # (d,)
 
-    if config.use_cholesky:
-        _pc = PreconditionerConfig(
-            type="cholesky",
-            shrinkage=config.cholesky_shrinkage,
-            jitter=config.cholesky_jitter,
-            ema_beta=config.cholesky_ema_beta,
-        )
+    pc = config.preconditioner
+    if pc.is_cholesky:
         cholesky_factor = compute_ensemble_cholesky(
-            positions, jnp.eye(d), _pc,
+            positions, jnp.eye(d), pc,
         )
     else:
         cholesky_factor = jnp.eye(d)
@@ -151,7 +136,7 @@ def step(
     3. Accept / reject each particle independently (MH).
     4. Update preconditioner if enabled.
 
-    When ``config.use_cholesky`` is True, delegates to
+    When ``config.preconditioner.is_cholesky`` is True, delegates to
     :func:`mala_kernel` for the full Cholesky-preconditioned step.
 
     Args:
@@ -164,27 +149,22 @@ def step(
         Tuple ``(new_state, info)`` where info contains
         ``"acceptance_rate"`` and ``"score_norm"``.
     """
-    h = config.step_size
+    h = config.stepsize
     x = state.positions                # (N, d)
     log_pi_x = state.log_prob          # (N,)
     s_x = state.scores                 # (N, d)
+    pc = config.preconditioner
 
-    if config.use_cholesky:
+    if pc.is_cholesky:
         # --- Cholesky-preconditioned MALA via shared kernel ---
         new_positions, new_log_prob, new_scores, accept_float = mala_kernel(
             key, x, log_pi_x, s_x, target,
-            h=h, L=state.cholesky_factor, score_clip=config.score_clip,
+            h=h, L=state.cholesky_factor, score_clip=config.clip_score,
         )
 
         # Update Cholesky from post-step positions
-        _pc = PreconditionerConfig(
-            type="cholesky",
-            shrinkage=config.cholesky_shrinkage,
-            jitter=config.cholesky_jitter,
-            ema_beta=config.cholesky_ema_beta,
-        )
         new_cholesky = compute_ensemble_cholesky(
-            new_positions, state.cholesky_factor, _pc,
+            new_positions, state.cholesky_factor, pc,
         )
 
         acceptance_rate = jnp.mean(accept_float)
@@ -201,12 +181,12 @@ def step(
         info = {"acceptance_rate": acceptance_rate, "score_norm": score_norm}
         return new_state, info
 
-    # --- Diagonal path (existing implementation, unchanged) ---
+    # --- Diagonal path (RMSProp or identity) ---
 
-    if config.precondition:
-        P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)  # (d,)
+    if pc.is_rmsprop:
+        P = 1.0 / jnp.sqrt(state.precond_accum + pc.delta)  # (d,)
     else:
-        P = jnp.ones(x.shape[-1])      # (d,)  — identity
+        P = jnp.ones(x.shape[-1])      # (d,)  -- identity
 
     # P^2 for the quadratic form in proposal density
     P2 = P * P                          # (d,)
@@ -221,11 +201,9 @@ def step(
 
     # --- Evaluate target at proposals ---
     log_pi_y = target.log_prob(y)                              # (N,)
-    s_y = clip_scores(target.score(y), config.score_clip)      # (N, d)
+    s_y = clip_scores(target.score(y), config.clip_score)      # (N, d)
 
     # --- Proposal log-densities (normalization cancels) ---
-    # q(y | x) ∝ exp(-||y - mu_fwd||^2_{P^{-2}} / (4h))
-    # where ||v||^2_{P^{-2}} = sum(v^2 / P^2)
     # Forward: log q(y | x)
     diff_fwd = y - mu_fwd                                     # (N, d)
     log_q_fwd = -0.5 * jnp.sum(diff_fwd ** 2 / (2.0 * h * P2), axis=-1)  # (N,)
@@ -248,9 +226,9 @@ def step(
     new_scores = jnp.where(accept[:, None], s_y, s_x)         # (N, d)
 
     # --- Update preconditioner ---
-    if config.precondition:
+    if pc.is_rmsprop:
         new_accum = update_preconditioner(
-            state.precond_accum, new_scores, config.precond_beta
+            state.precond_accum, new_scores, pc.beta
         )
     else:
         new_accum = state.precond_accum

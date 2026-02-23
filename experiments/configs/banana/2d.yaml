@@ -1,0 +1,104 @@
+experiment:
+  name: "banana-2d"
+  seeds: [0, 1, 2, 3, 4]
+
+  target:
+    type: "banana"
+    params:
+      dim: 2
+      curvature: 0.1
+      offset: 100.0
+      sigma1: 10.0
+      sigma2: 1.0
+
+  shared:
+    n_particles: 200
+    n_iterations: 500
+    init:
+      type: "gaussian"
+      scale: 5.0
+
+  checkpoints: [0, 1, 10, 50, 100, 200, 500]
+
+  metrics:
+    - "energy_distance"
+    - "mean_error"
+    - "sliced_wasserstein"
+
+  algorithms:
+    - label: "ETD-B"
+      cost:
+        type: "euclidean"
+        normalize: "median"
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      epsilon: 0.1
+      proposal:
+        count: 25
+        alpha: 0.5
+
+    # --- LRET: Langevin-adapted geometry ---
+    - label: "LRET-B"
+      cost: {type: "langevin"}
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      epsilon: 0.1            # FDR: alpha=epsilon=0.1
+      proposal:
+        count: 25
+
+    - label: "LRET-B-W"
+      cost: {type: "langevin", whiten: true}
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      epsilon: 0.1
+      proposal:
+        count: 25
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        shrinkage: 0.1
+
+    # --- Mutation: MCMC rejuvenation ---
+    - label: "ETD-B+MALA"
+      cost: "euclidean"
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      epsilon: 0.1
+      proposal:
+        alpha: 0.5
+        count: 25
+      mutation:
+        kernel: "mala"
+        steps: 5
+        stepsize: 0.01
+        cholesky: true
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        shrinkage: 0.1
+
+    # --- Combined: LRET + MALA ---
+    - label: "LRET-B+MALA"
+      cost: {type: "langevin", whiten: true}
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      epsilon: 0.1
+      proposal:
+        count: 25
+      mutation:
+        kernel: "mala"
+        steps: 5
+        stepsize: 0.01
+        cholesky: true
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        shrinkage: 0.1

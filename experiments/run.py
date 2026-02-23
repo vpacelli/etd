@@ -4,8 +4,8 @@ Loads a YAML config, expands sweeps, runs algorithms on a target,
 records metrics at checkpoints, and saves results.
 
 Usage:
-    python -m experiments.run configs/gmm_2d_4.yaml
-    python -m experiments.run configs/gmm_2d_4.yaml --debug   # no JIT
+    python -m experiments.run experiments/configs/gmm/2d_4.yaml
+    python -m experiments.run experiments/configs/gmm/2d_4.yaml --debug   # no JIT
 """
 
 from __future__ import annotations
@@ -47,7 +47,16 @@ from etd.diagnostics.metrics import (
 from etd.schedule import Schedule
 from etd.step import init as etd_init, step as etd_step
 from etd.targets import get_target
-from etd.types import ETDConfig, MutationConfig, PreconditionerConfig
+from etd.types import (
+    CostConfig,
+    CouplingConfig,
+    ETDConfig,
+    FeedbackConfig,
+    MutationConfig,
+    PreconditionerConfig,
+    ProposalConfig,
+    UpdateConfig,
+)
 
 console = Console()
 
@@ -112,12 +121,12 @@ def _make_jit_scan(
     reuse and ``fold_in`` keying for deterministic PRNG.
 
     Args:
-        step_fn: Algorithm step function ``(key, state, target, config) → (state, info)``.
+        step_fn: Algorithm step function ``(key, state, target, config) -> (state, info)``.
         target: Target distribution (captured by closure, static for JIT).
         config: Algorithm config (captured by closure, static for JIT).
 
     Returns:
-        ``run_segment(state, key_base, start_iter, n_steps) → final_state``
+        ``run_segment(state, key_base, start_iter, n_steps) -> final_state``
     """
     # Suppress JAX warning about donating int32 fields (e.g. state.step)
     warnings.filterwarnings(
@@ -129,7 +138,7 @@ def _make_jit_scan(
         """Run n_steps of step_fn as a fused scan.
 
         Args:
-            state: Algorithm state (donated — buffer reused in-place).
+            state: Algorithm state (donated -- buffer reused in-place).
             key_base: Base PRNG key; per-step keys derived via fold_in.
             start_iter: 1-based iteration index of the first step.
             n_steps: Number of steps to run (static).
@@ -263,19 +272,26 @@ def build_algo_label(base_label: str, entry: dict, original: dict) -> str:
     """
     abbrevs = {
         "epsilon": "eps",
-        "learning_rate": "lr",
-        "step_size": "h",
+        "stepsize": "h",
         "temperature": "T",
-        "n_proposals": "M",
         "bandwidth": "bw",
+        # Nested sub-config abbreviations
+        "proposal.alpha": "alpha",
+        "proposal.count": "M",
+        "proposal.clip_score": "clip",
+        "coupling.tolerance": "tol",
+        "coupling.rho": "rho",
+        "update.damping": "damp",
+        "mutation.steps": "mut.steps",
+        "mutation.stepsize": "mut.h",
+        "feedback.weight": "dv",
     }
 
     sweep_axes = _collect_sweep_axes(original)
     suffixes = []
     for dotted_key, _ in sweep_axes:
         # Use the leaf key name for abbreviation and value lookup
-        leaf = dotted_key.split(".")[-1]
-        abbrev = abbrevs.get(leaf, leaf)
+        abbrev = abbrevs.get(dotted_key, dotted_key.split(".")[-1])
         # Resolve value from the expanded entry
         val = entry
         for part in dotted_key.split("."):
@@ -288,93 +304,297 @@ def build_algo_label(base_label: str, entry: dict, original: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Algorithm config dispatch
+# Sub-config expansion helpers
 # ---------------------------------------------------------------------------
 
-# Parameters that are NOT passed to ETDConfig (they are meta or shared)
-_ETD_META_KEYS = {"label", "type", "method", "sublabel", "display", "enabled"}
+# Parameters that are NOT passed to algorithm configs (meta or shared)
+_META_KEYS = {"label", "type", "method", "sublabel", "display", "enabled"}
 
 
-def _resolve_preconditioner_config(kwargs: dict) -> dict:
-    """Resolve preconditioner config from YAML kwargs.
+def _expand_proposal(raw) -> ProposalConfig:
+    """Expand proposal config from YAML value.
 
-    Handles two formats:
+    Accepts:
+    - str: ``"score"`` or ``"score_free"`` -> defaults
+    - dict: ``{type: "score", count: 25, alpha: 0.05, ...}``
+    - None: defaults
 
-    **New nested format** (preferred)::
+    Args:
+        raw: YAML value for ``proposal``.
 
-        preconditioner:
-          type: "cholesky"
-          proposals: true
-          cost: true
-          shrinkage: 0.1
+    Returns:
+        :class:`ProposalConfig` instance.
+    """
+    if raw is None:
+        return ProposalConfig()
+    if isinstance(raw, str):
+        return ProposalConfig(type=raw)
+    if isinstance(raw, ProposalConfig):
+        return raw
+    # dict
+    d = dict(raw)
+    return ProposalConfig(
+        type=d.pop("type", "score"),
+        count=int(d.pop("count", 25)),
+        alpha=float(d.pop("alpha", 0.05)),
+        fdr=bool(d.pop("fdr", True)),
+        sigma=float(d.pop("sigma", 0.0)),
+        clip_score=float(d.pop("clip_score", 5.0)),
+    )
 
-    **Legacy flat format** (backward compatible)::
 
-        precondition: true
-        whiten: true
+def _expand_cost(raw) -> CostConfig:
+    """Expand cost config from YAML value.
 
-    When the new format is present, it is converted to a
-    :class:`PreconditionerConfig` instance and inserted into kwargs.
-    Legacy flat fields are left as-is for ETDConfig backward compat.
+    Accepts:
+    - str: ``"euclidean"`` -> defaults
+    - dict: ``{type: "imq", c: 1.0, normalize: "median"}``
+      Extra keys beyond type/normalize become ``params``.
+    - None: defaults
+    """
+    if raw is None:
+        return CostConfig()
+    if isinstance(raw, str):
+        return CostConfig(type=raw)
+    if isinstance(raw, CostConfig):
+        return raw
+    d = dict(raw)
+    cost_type = d.pop("type", "euclidean")
+    normalize = str(d.pop("normalize", "median"))
+    # Remaining keys are extra params (e.g. c=1.0, whiten=True)
+    params = tuple(sorted(d.items())) if d else ()
+    return CostConfig(type=cost_type, normalize=normalize, params=params)
+
+
+def _expand_coupling(raw) -> CouplingConfig:
+    """Expand coupling config from YAML value.
+
+    Accepts:
+    - str: ``"balanced"`` -> defaults
+    - dict: ``{type: "balanced", tolerance: 1e-5}``
+    - None: defaults
+    """
+    if raw is None:
+        return CouplingConfig()
+    if isinstance(raw, str):
+        return CouplingConfig(type=raw)
+    if isinstance(raw, CouplingConfig):
+        return raw
+    d = dict(raw)
+    return CouplingConfig(
+        type=d.pop("type", "balanced"),
+        iterations=int(d.pop("iterations", 50)),
+        tolerance=float(d.pop("tolerance", 1e-2)),
+        rho=float(d.pop("rho", 1.0)),
+    )
+
+
+def _expand_update(raw) -> UpdateConfig:
+    """Expand update config from YAML value.
+
+    Accepts:
+    - str: ``"categorical"`` -> defaults
+    - dict: ``{type: "categorical", damping: 0.5}``
+    - None: defaults
+    """
+    if raw is None:
+        return UpdateConfig()
+    if isinstance(raw, str):
+        return UpdateConfig(type=raw)
+    if isinstance(raw, UpdateConfig):
+        return raw
+    d = dict(raw)
+    return UpdateConfig(
+        type=d.pop("type", "categorical"),
+        damping=float(d.pop("damping", 1.0)),
+    )
+
+
+def _expand_preconditioner(raw) -> PreconditionerConfig:
+    """Expand preconditioner config from YAML value.
+
+    Accepts:
+    - str: ``"none"``, ``"rmsprop"``, ``"cholesky"``
+    - dict: full config
+    - None: defaults
+    """
+    if raw is None:
+        return PreconditionerConfig()
+    if isinstance(raw, str):
+        _defaults = {
+            "none": PreconditionerConfig(),
+            "rmsprop": PreconditionerConfig(type="rmsprop", proposals=True),
+            "cholesky": PreconditionerConfig(
+                type="cholesky", proposals=True, cost=True,
+            ),
+        }
+        return _defaults.get(raw, PreconditionerConfig())
+    if isinstance(raw, PreconditionerConfig):
+        return raw
+    d = dict(raw)
+    # Coerce types
+    _BOOL_KEYS = {"proposals", "cost"}
+    _FLOAT_KEYS = {"clip_score", "beta", "delta", "shrinkage", "jitter", "ema"}
+    for k in _BOOL_KEYS:
+        if k in d:
+            d[k] = bool(d[k])
+    for k in _FLOAT_KEYS:
+        if k in d:
+            d[k] = float(d[k])
+    return PreconditionerConfig(**d)
+
+
+def _expand_mutation(raw) -> MutationConfig:
+    """Expand mutation config from YAML value.
+
+    Accepts:
+    - str: ``"none"``, ``"mala"``, ``"rwm"``
+    - dict: full config
+    - None: defaults
+    """
+    if raw is None:
+        return MutationConfig()
+    if isinstance(raw, str):
+        if raw == "none":
+            return MutationConfig()
+        return MutationConfig(kernel=raw)
+    if isinstance(raw, MutationConfig):
+        return raw
+    d = dict(raw)
+    _BOOL_KEYS = {"cholesky"}
+    _FLOAT_KEYS = {"stepsize", "clip_score"}
+    _INT_KEYS = {"steps"}
+    for k in _BOOL_KEYS:
+        if k in d:
+            d[k] = bool(d[k])
+    for k in _FLOAT_KEYS:
+        if k in d and d[k] is not None:
+            d[k] = float(d[k])
+    for k in _INT_KEYS:
+        if k in d:
+            d[k] = int(d[k])
+    return MutationConfig(**d)
+
+
+def _expand_feedback(raw) -> FeedbackConfig:
+    """Expand feedback config from YAML value.
+
+    Accepts:
+    - bool: ``true`` -> enabled
+    - dict: ``{enabled: true, weight: 0.5}``
+    - None: defaults
+    """
+    if raw is None:
+        return FeedbackConfig()
+    if isinstance(raw, bool):
+        return FeedbackConfig(enabled=raw)
+    if isinstance(raw, FeedbackConfig):
+        return raw
+    d = dict(raw)
+    return FeedbackConfig(
+        enabled=bool(d.pop("enabled", False)),
+        weight=float(d.pop("weight", 1.0)),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schedule extraction
+# ---------------------------------------------------------------------------
+
+def _extract_schedules(kwargs: dict) -> tuple:
+    """Extract schedule dicts from kwargs, supporting nested sub-config dicts.
+
+    A schedule is any dict value with a ``"schedule"`` key::
+
+        epsilon: {schedule: "linear_warmup", value: 0.1, warmup: 100}
+        proposal:
+          alpha: {schedule: "cosine_decay", value: 0.05, end: 0.001}
+
+    Top-level schedules use simple keys (``"epsilon"``).
+    Nested schedules use dotted keys (``"proposal.alpha"``).
+
+    Modifies ``kwargs`` in-place: schedule dicts are replaced with
+    their ``value`` field (the target/start value).
 
     Args:
         kwargs: Mutable dict of algorithm kwargs.
 
     Returns:
-        The same dict (mutated in-place).
+        Tuple of ``(dotted_key, Schedule)`` pairs.
     """
-    raw = kwargs.get("preconditioner")
-    if isinstance(raw, dict):
-        raw = dict(raw)  # copy to avoid mutating YAML entry
-        # Coerce types
-        _BOOL_KEYS = {"proposals", "cost", "use_unclipped_scores"}
-        _FLOAT_KEYS = {"beta", "delta", "shrinkage", "jitter", "ema_beta"}
-        for k in _BOOL_KEYS:
-            if k in raw:
-                raw[k] = bool(raw[k])
-        for k in _FLOAT_KEYS:
-            if k in raw:
-                raw[k] = float(raw[k])
-        kwargs["preconditioner"] = PreconditionerConfig(**raw)
+    schedules = []
+
+    # Top-level schedules
+    for k in list(kwargs):
+        v = kwargs[k]
+        if isinstance(v, dict) and "schedule" in v:
+            v = dict(v)  # copy
+            kind = v.pop("schedule")
+            value = float(v.pop("value"))
+            sched_kw = {}
+            for sk, sv in v.items():
+                if sk == "warmup":
+                    sched_kw[sk] = int(sv)
+                else:
+                    sched_kw[sk] = float(sv)
+            sched = Schedule(kind=kind, value=value, **sched_kw)
+            kwargs[k] = value
+            schedules.append((k, sched))
+
+    # Nested schedules (inside sub-config dicts)
+    _SUB_CONFIG_KEYS = {
+        "proposal", "cost", "coupling", "update", "feedback",
+    }
+    for sub_key in _SUB_CONFIG_KEYS:
+        sub = kwargs.get(sub_key)
+        if isinstance(sub, dict):
+            for k in list(sub):
+                v = sub[k]
+                if isinstance(v, dict) and "schedule" in v:
+                    v = dict(v)
+                    kind = v.pop("schedule")
+                    value = float(v.pop("value"))
+                    sched_kw = {}
+                    for sk, sv in v.items():
+                        if sk == "warmup":
+                            sched_kw[sk] = int(sv)
+                        else:
+                            sched_kw[sk] = float(sv)
+                    sched = Schedule(kind=kind, value=value, **sched_kw)
+                    sub[k] = value
+                    schedules.append((f"{sub_key}.{k}", sched))
+
+    return tuple(schedules)
+
+
+# ---------------------------------------------------------------------------
+# Baseline field translation
+# ---------------------------------------------------------------------------
+
+_BASELINE_RENAMES = {
+    "svgd": {"learning_rate": "stepsize", "score_clip": "clip_score"},
+    "ula": {"step_size": "stepsize", "score_clip": "clip_score"},
+    "mala": {"step_size": "stepsize", "score_clip": "clip_score"},
+    "mppi": {},
+    "eks": {},
+}
+
+
+def _translate_baseline_fields(method: str, kwargs: dict) -> dict:
+    """Apply field name translations for baseline configs.
+
+    Supports both old and new field names in YAML for backward compat.
+    """
+    renames = _BASELINE_RENAMES.get(method, {})
+    for old_name, new_name in renames.items():
+        if old_name in kwargs and new_name not in kwargs:
+            kwargs[new_name] = kwargs.pop(old_name)
     return kwargs
 
 
-def _resolve_mutation_config(kwargs: dict) -> dict:
-    """Resolve mutation config from YAML kwargs.
-
-    Converts a nested ``mutation:`` dict to a :class:`MutationConfig`
-    instance::
-
-        mutation:
-          kernel: "mala"
-          n_steps: 5
-          step_size: 0.01
-          use_cholesky: true
-
-    Args:
-        kwargs: Mutable dict of algorithm kwargs.
-
-    Returns:
-        The same dict (mutated in-place).
-    """
-    raw = kwargs.get("mutation")
-    if isinstance(raw, dict):
-        raw = dict(raw)  # copy to avoid mutating YAML entry
-        _BOOL_KEYS = {"use_cholesky"}
-        _FLOAT_KEYS = {"step_size", "score_clip"}
-        _INT_KEYS = {"n_steps"}
-        for k in _BOOL_KEYS:
-            if k in raw:
-                raw[k] = bool(raw[k])
-        for k in _FLOAT_KEYS:
-            if k in raw and raw[k] is not None:
-                raw[k] = float(raw[k])
-        for k in _INT_KEYS:
-            if k in raw:
-                raw[k] = int(raw[k])
-        kwargs["mutation"] = MutationConfig(**raw)
-    return kwargs
-
+# ---------------------------------------------------------------------------
+# Algorithm config dispatch
+# ---------------------------------------------------------------------------
 
 def build_algo_config(
     entry: dict,
@@ -399,12 +619,21 @@ def build_algo_config(
         # Build kwargs from entry + shared
         kwargs = {}
         for k, v in entry.items():
-            if k in _ETD_META_KEYS:
+            if k in _META_KEYS:
                 continue
             kwargs[k] = v
 
         kwargs["n_particles"] = shared.get("n_particles", 100)
         kwargs["n_iterations"] = shared.get("n_iterations", 500)
+
+        # Apply field name translations
+        _translate_baseline_fields(method, kwargs)
+
+        # Handle MALA preconditioner
+        if method == "mala":
+            raw_pc = kwargs.pop("preconditioner", None)
+            if raw_pc is not None:
+                kwargs["preconditioner"] = _expand_preconditioner(raw_pc)
 
         config = config_cls(**kwargs)
         return config, bl["init"], bl["step"], True
@@ -415,84 +644,89 @@ def build_algo_config(
 
         kwargs = {}
         for k, v in entry.items():
-            if k in _ETD_META_KEYS:
+            if k in _META_KEYS:
                 continue
             kwargs[k] = v
 
-        kwargs["n_particles"] = shared.get("n_particles", 100)
-        kwargs["n_iterations"] = shared.get("n_iterations", 500)
+        n_particles = shared.get("n_particles", 100)
+        n_iterations = shared.get("n_iterations", 500)
 
-        # Normalize dict-style cost: {type: imq, c: 1.0} → cost="imq", cost_params=(("c",1.0),)
-        raw_cost = kwargs.get("cost", "euclidean")
-        if isinstance(raw_cost, dict):
-            raw_cost = dict(raw_cost)  # copy to avoid mutating YAML entry
-            kwargs["cost"] = raw_cost.pop("type")
-            kwargs["cost_params"] = tuple(sorted(raw_cost.items()))
+        # Extract schedules (modifies kwargs in-place)
+        schedules = _extract_schedules(kwargs)
 
-        # Extract schedule dicts: {schedule: "linear_warmup", value: 1.0, warmup: 200}
-        schedules = []
-        for k in list(kwargs):
-            v = kwargs[k]
-            if isinstance(v, dict) and "schedule" in v:
-                v = dict(v)  # copy to avoid mutating YAML entry
-                kind = v.pop("schedule")
-                value = float(v.pop("value"))
-                # Coerce remaining kwargs to appropriate types
-                sched_kw = {}
-                for sk, sv in v.items():
-                    if sk == "warmup":
-                        sched_kw[sk] = int(sv)
-                    else:
-                        sched_kw[sk] = float(sv)
-                sched = Schedule(kind=kind, value=value, **sched_kw)
-                kwargs[k] = value  # base field gets target/start value
-                schedules.append((k, sched))
-        if schedules:
-            kwargs["schedules"] = tuple(schedules)
+        # Expand sub-configs
+        proposal = _expand_proposal(kwargs.pop("proposal", None))
+        cost = _expand_cost(kwargs.pop("cost", None))
+        coupling = _expand_coupling(kwargs.pop("coupling", None))
+        update = _expand_update(kwargs.pop("update", None))
+        preconditioner = _expand_preconditioner(kwargs.pop("preconditioner", None))
+        mutation = _expand_mutation(kwargs.pop("mutation", None))
+        feedback = _expand_feedback(kwargs.pop("feedback", None))
 
-        # Langevin cost FDR defaults: α = ε, σ = √(2ε) unless overridden.
-        if kwargs.get("cost") == "langevin":
-            # Scores are required for Langevin cost.
-            kwargs.setdefault("use_score", True)
-            # FDR on by default (σ = √(2α)).
-            kwargs.setdefault("fdr", True)
-            # Default α = ε (consistent Langevin discretization).
-            if "alpha" not in entry:
-                kwargs["alpha"] = kwargs.get("epsilon", 0.1)
+        epsilon = float(kwargs.pop("epsilon", 0.1))
 
-        # Resolve nested config objects (dict → frozen dataclass)
-        _resolve_preconditioner_config(kwargs)
-        _resolve_mutation_config(kwargs)
+        # Langevin cost FDR defaults: alpha = epsilon unless overridden
+        if cost.type == "langevin":
+            if proposal.fdr:
+                # Check if alpha was explicitly set in the proposal sub-config
+                raw_proposal = entry.get("proposal", {})
+                alpha_explicit = (
+                    isinstance(raw_proposal, dict) and "alpha" in raw_proposal
+                )
+                if not alpha_explicit:
+                    proposal = dataclasses.replace(proposal, alpha=epsilon)
 
         if is_sdd:
-            from etd.extensions.sdd import SDDConfig
+            from etd.extensions.sdd import SDDConfig, SelfCouplingConfig
             from etd.extensions.sdd import init as sdd_init
             from etd.extensions.sdd import step as sdd_step
 
-            _COERCE = {"float": float, "int": int, "bool": bool}
-            field_types = {f.name: f.type for f in dataclasses.fields(SDDConfig)}
-            for k, v in list(kwargs.items()):
-                coerce_fn = _COERCE.get(field_types.get(k, ""))
-                if coerce_fn is not None and not isinstance(v, coerce_fn):
-                    kwargs[k] = coerce_fn(v)
+            # Self-coupling config
+            raw_self = kwargs.pop("self_coupling", None)
+            if raw_self is None:
+                self_coupling = SelfCouplingConfig()
+            elif isinstance(raw_self, dict):
+                d = dict(raw_self)
+                self_coupling = SelfCouplingConfig(
+                    epsilon=float(d.pop("epsilon", 0.1)),
+                    iterations=int(d.pop("iterations", 50)),
+                    tolerance=float(d.pop("tolerance", 1e-2)),
+                )
+            else:
+                self_coupling = raw_self
 
-            # Remove keys not in SDDConfig
-            valid_fields = {f.name for f in dataclasses.fields(SDDConfig)}
-            kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+            eta = float(kwargs.pop("eta", 0.5))
 
-            config = SDDConfig(**kwargs)
+            config = SDDConfig(
+                n_particles=n_particles,
+                n_iterations=n_iterations,
+                epsilon=epsilon,
+                proposal=proposal,
+                cost=cost,
+                coupling=coupling,
+                update=update,
+                preconditioner=preconditioner,
+                mutation=mutation,
+                feedback=feedback,
+                self_coupling=self_coupling,
+                eta=eta,
+                schedules=schedules,
+            )
             return config, sdd_init, sdd_step, False
 
-        # Coerce YAML values to match ETDConfig field types.
-        # YAML parses '1e-3' as a string; this casts it to float.
-        _COERCE = {"float": float, "int": int, "bool": bool}
-        field_types = {f.name: f.type for f in dataclasses.fields(ETDConfig)}
-        for k, v in list(kwargs.items()):
-            coerce_fn = _COERCE.get(field_types.get(k, ""))
-            if coerce_fn is not None and not isinstance(v, coerce_fn):
-                kwargs[k] = coerce_fn(v)
-
-        config = ETDConfig(**kwargs)
+        config = ETDConfig(
+            n_particles=n_particles,
+            n_iterations=n_iterations,
+            epsilon=epsilon,
+            proposal=proposal,
+            cost=cost,
+            coupling=coupling,
+            update=update,
+            preconditioner=preconditioner,
+            mutation=mutation,
+            feedback=feedback,
+            schedules=schedules,
+        )
         return config, etd_init, etd_step, False
 
 
@@ -669,8 +903,8 @@ def run_single(
 
     Returns:
         Tuple ``(metrics_dict, particles_dict, wall_clock)`` where:
-        - ``metrics_dict``: ``{checkpoint → {metric → value}}``
-        - ``particles_dict``: ``{checkpoint → (N, d) ndarray}``
+        - ``metrics_dict``: ``{checkpoint -> {metric -> value}}``
+        - ``particles_dict``: ``{checkpoint -> (N, d) ndarray}``
         - ``wall_clock``: Total wall-clock seconds.
     """
     k_init, k_run = jax.random.split(key)
@@ -688,7 +922,7 @@ def run_single(
         scan_runner = _make_jit_scan(step_fn, target, config)
 
         # Use numpy positions so each init_fn call creates a fresh JAX
-        # buffer — donation consumes the warmup buffer and we need a
+        # buffer -- donation consumes the warmup buffer and we need a
         # separate allocation for the real run.
         init_positions_np = np.asarray(init_positions)
 
@@ -778,10 +1012,10 @@ def save_results(
     Args:
         out_dir: Output directory path.
         cfg: Original config dict (written as config.yaml).
-        all_metrics: ``{seed → {algo → {ckpt → {metric → val}}}}``.
-        all_particles: ``{seed → {algo → {ckpt → (N,d) ndarray}}}``.
+        all_metrics: ``{seed -> {algo -> {ckpt -> {metric -> val}}}}``.
+        all_particles: ``{seed -> {algo -> {ckpt -> (N,d) ndarray}}}``.
         ref_data: Reference samples ``(M, d)`` to bundle for portability.
-        display_metadata: Resolved display styles ``{label → {family, color, ...}}``
+        display_metadata: Resolved display styles ``{label -> {family, color, ...}}``
             from :func:`figures.style.resolve_algo_styles`.
 
     Returns:
@@ -847,7 +1081,7 @@ def _print_summary(
     final_ckpt = max(checkpoints)
 
     table = Table(
-        title="Results (seed avg ± std)",
+        title="Results (seed avg +/- std)",
         box=box.ROUNDED,
         show_lines=False,
     )
@@ -867,7 +1101,7 @@ def _print_summary(
             if vals:
                 avg = np.mean(vals)
                 std = np.std(vals)
-                row.append(f"{avg:.4f} ± {std:.4f}")
+                row.append(f"{avg:.4f} +/- {std:.4f}")
             else:
                 row.append("N/A")
 
@@ -875,7 +1109,7 @@ def _print_summary(
         wc_vals = [wall_clocks.get((seed, label), 0.0) for seed in seeds]
         wc_avg = np.mean(wc_vals)
         wc_std = np.std(wc_vals)
-        row.append(f"{wc_avg:.1f} ± {wc_std:.1f}s")
+        row.append(f"{wc_avg:.1f} +/- {wc_std:.1f}s")
 
         table.add_row(*row)
 
@@ -980,7 +1214,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
     mode_str = "parallel" if parallel_seeds else "sequential"
     console.print(
-        f"[{now}] Running {len(algo_configs)} algorithms × {len(seeds)} seeds ({mode_str})"
+        f"[{now}] Running {len(algo_configs)} algorithms x {len(seeds)} seeds ({mode_str})"
     )
 
     # --- Reference data ---
@@ -990,8 +1224,8 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     # --- Pre-compute init positions (shared across algorithms) ---
     # Init positions depend only on (seed, target, shared), not on the
     # algorithm, so we compute them once and reuse for all algorithms.
-    seed_run_keys = {}  # seed → k_run (passed to run_single / batched)
-    seed_init_positions = {}  # seed → (N, d) ndarray
+    seed_run_keys = {}  # seed -> k_run (passed to run_single / batched)
+    seed_init_positions = {}  # seed -> (N, d) ndarray
     for seed in seeds:
         key = jax.random.PRNGKey(seed)
         k_init, _k_ref, k_run = jax.random.split(key, 3)
@@ -1012,9 +1246,9 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
             compiled_steps[label] = step_fn  # raw, no JIT in debug
 
     # --- Run ---
-    all_metrics = {}   # seed → algo → ckpt → {metric: val}
-    all_particles = {} # seed → algo → ckpt → (N,d) ndarray
-    wall_clocks = {}   # (seed, algo) → seconds
+    all_metrics = {}   # seed -> algo -> ckpt -> {metric: val}
+    all_particles = {} # seed -> algo -> ckpt -> (N,d) ndarray
+    wall_clocks = {}   # (seed, algo) -> seconds
 
     if parallel_seeds and not DEBUG:
         # --- Batched path: vmap over seeds ---
@@ -1107,7 +1341,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
         out_dir, cfg, all_metrics, all_particles,
         ref_data=ref_data, display_metadata=resolved_styles,
     )
-    console.print(f"\n✓ Results saved to {out_dir}/")
+    console.print(f"\nResults saved to {out_dir}/")
 
     return all_metrics
 

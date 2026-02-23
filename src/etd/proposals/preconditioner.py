@@ -97,9 +97,9 @@ def compute_ensemble_cholesky(
     cov_reg = cov + config.jitter * jnp.eye(d)        # (d, d)
 
     # 4. EMA blending (on covariance, not on L — preserves PD)
-    if config.ema_beta > 0.0:
+    if config.ema > 0.0:
         prev_cov = prev_L @ prev_L.T                  # (d, d)
-        cov_reg = config.ema_beta * prev_cov + (1.0 - config.ema_beta) * cov_reg
+        cov_reg = config.ema * prev_cov + (1.0 - config.ema) * cov_reg
 
     # 5. Cholesky factorization
     L = jnp.linalg.cholesky(cov_reg)                  # (d, d)

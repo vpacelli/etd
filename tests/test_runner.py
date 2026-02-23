@@ -14,9 +14,10 @@ import numpy as np
 import pytest
 import yaml
 
+from conftest import make_test_config
 from experiments.run import (
     _compute_segments,
-    _resolve_mutation_config,
+    _expand_mutation,
     build_algo_config,
     build_algo_label,
     compute_metrics,
@@ -31,7 +32,6 @@ from experiments.run import (
 from etd.targets import get_target
 from etd.types import MutationConfig
 from etd.targets.gmm import GMMTarget
-from etd.types import ETDConfig
 
 
 # ---------------------------------------------------------------------------
@@ -55,14 +55,14 @@ def ref_data(gmm_target):
 
 class TestExpandSweeps:
     def test_no_lists(self):
-        """No list params → returns [entry] unchanged."""
+        """No list params -> returns [entry] unchanged."""
         entry = {"label": "ETD-B", "epsilon": 0.1, "alpha": 0.05}
         result = expand_algo_sweeps(entry)
         assert len(result) == 1
         assert result[0] == entry
 
     def test_single_list(self):
-        """Single list param → len(list) entries."""
+        """Single list param -> len(list) entries."""
         entry = {"label": "ETD-B", "epsilon": [0.1, 0.2, 0.3]}
         result = expand_algo_sweeps(entry)
         assert len(result) == 3
@@ -70,7 +70,7 @@ class TestExpandSweeps:
         assert result[2]["epsilon"] == 0.3
 
     def test_cartesian_product(self):
-        """Two list params → Cartesian product."""
+        """Two list params -> Cartesian product."""
         entry = {
             "label": "ETD-B",
             "epsilon": [0.1, 0.2],
@@ -86,7 +86,7 @@ class TestExpandSweeps:
 
 class TestBuildLabel:
     def test_no_sweep(self):
-        """No list in original → label unchanged."""
+        """No list in original -> label unchanged."""
         entry = {"label": "ETD-B", "epsilon": 0.1}
         label = build_algo_label("ETD-B", entry, entry)
         assert label == "ETD-B"
@@ -104,27 +104,51 @@ class TestBuildLabel:
 # ---------------------------------------------------------------------------
 
 class TestBuildConfig:
+
     def test_etd_config(self):
-        """Dict → ETDConfig with correct fields."""
+        """Dict -> ETDConfig with correct fields (nested sub-config dicts)."""
         entry = {
             "label": "ETD-B",
             "cost": "euclidean",
             "coupling": "balanced",
             "update": "categorical",
             "epsilon": 0.1,
-            "alpha": 0.05,
-            "use_score": True,
+            "proposal": {"type": "score", "alpha": 0.05},
         }
         shared = {"n_particles": 50, "n_iterations": 100}
         config, init_fn, step_fn, is_bl = build_algo_config(entry, shared)
 
+        from etd.types import ETDConfig
         assert isinstance(config, ETDConfig)
         assert config.n_particles == 50
         assert config.epsilon == 0.1
+        assert config.proposal.alpha == 0.05
+        assert config.proposal.use_score
+        assert config.coupling.type == "balanced"
+        assert config.cost.type == "euclidean"
+        assert not is_bl
+
+    def test_etd_config_nested(self):
+        """Dict -> ETDConfig with nested sub-config dicts."""
+        entry = {
+            "label": "ETD-B",
+            "epsilon": 0.1,
+            "proposal": {"type": "score", "count": 25, "alpha": 0.05},
+            "cost": "euclidean",
+            "coupling": {"type": "balanced", "tolerance": 1e-3},
+            "update": "categorical",
+        }
+        shared = {"n_particles": 50, "n_iterations": 100}
+        config, init_fn, step_fn, is_bl = build_algo_config(entry, shared)
+
+        from etd.types import ETDConfig
+        assert isinstance(config, ETDConfig)
+        assert config.proposal.count == 25
+        assert config.coupling.tolerance == 1e-3
         assert not is_bl
 
     def test_baseline_config(self):
-        """Dict with type=baseline → correct baseline config."""
+        """Dict with type=baseline -> correct baseline config."""
         entry = {
             "label": "SVGD",
             "type": "baseline",
@@ -136,7 +160,7 @@ class TestBuildConfig:
 
         assert is_bl
         assert config.n_particles == 50
-        assert config.learning_rate == 0.1
+        assert config.stepsize == 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +185,7 @@ class TestComputeMetrics:
         assert 0 <= result["mode_balance"] <= np.log(2) + 1e-6
 
     def test_unknown_metric(self, gmm_target, ref_data):
-        """Unknown metric → NaN."""
+        """Unknown metric -> NaN."""
         particles = jnp.zeros((10, 2))
         result = compute_metrics(
             particles, gmm_target, ["nonexistent"], ref_data,
@@ -178,7 +202,7 @@ class TestRunSingle:
         """10-iteration ETD run returns correct dict structure."""
         from etd.step import init as etd_init, step as etd_step
 
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20, n_iterations=10, n_proposals=10,
             epsilon=0.1, alpha=0.05,
         )
@@ -201,7 +225,7 @@ class TestRunSingle:
         """10-iteration SVGD run returns correct dict structure."""
         from etd.baselines.svgd import SVGDConfig, init, step
 
-        config = SVGDConfig(n_particles=20, n_iterations=10, learning_rate=0.1)
+        config = SVGDConfig(n_particles=20, n_iterations=10, stepsize=0.1)
         key = jax.random.PRNGKey(0)
         init_pos = jax.random.normal(key, (20, 2)) * 2.0
 
@@ -223,7 +247,7 @@ class TestRunSingle:
 
 class TestSaveLoad:
     def test_roundtrip(self, gmm_target, ref_data):
-        """Round-trip: save → load metrics.json matches."""
+        """Round-trip: save -> load metrics.json matches."""
         with tempfile.TemporaryDirectory() as tmpdir:
             cfg = {"experiment": {"name": "test"}}
             all_metrics = {
@@ -267,7 +291,7 @@ class TestSaveLoad:
 class TestLoadConfig:
     def test_load_gmm_config(self):
         """Load the main GMM config file."""
-        cfg = load_config("experiments/configs/gmm_2d_4.yaml")
+        cfg = load_config("experiments/configs/gmm/2d_4.yaml")
         assert cfg["experiment"]["name"] == "gmm-2d-4"
         assert len(cfg["experiment"]["seeds"]) == 5
         assert len(cfg["experiment"]["algorithms"]) == 7
@@ -327,54 +351,49 @@ class TestComputeSegments:
 # ---------------------------------------------------------------------------
 
 class TestResolveMutationConfig:
-    """_resolve_mutation_config converts dict → MutationConfig."""
+    """_expand_mutation converts dict -> MutationConfig."""
 
     def test_dict_to_mutation_config(self):
-        kwargs = {
-            "mutation": {
-                "kernel": "mala",
-                "n_steps": 5,
-                "step_size": 0.01,
-                "use_cholesky": True,
-            },
+        raw = {
+            "kernel": "mala",
+            "steps": 5,
+            "stepsize": 0.01,
+            "cholesky": True,
         }
-        _resolve_mutation_config(kwargs)
-        mc = kwargs["mutation"]
+        mc = _expand_mutation(raw)
         assert isinstance(mc, MutationConfig)
         assert mc.kernel == "mala"
-        assert mc.n_steps == 5
-        assert mc.step_size == 0.01
-        assert mc.use_cholesky is True
+        assert mc.steps == 5
+        assert mc.stepsize == 0.01
+        assert mc.cholesky is True
 
     def test_build_algo_config_with_mutation(self):
-        """ETD entry with mutation block → correct ETDConfig."""
+        """ETD entry with mutation block -> correct ETDConfig."""
         entry = {
             "label": "test",
             "coupling": "balanced",
             "epsilon": 0.1,
-            "alpha": 0.05,
-            "n_proposals": 10,
+            "proposal": {"alpha": 0.05, "count": 10},
             "mutation": {
                 "kernel": "mala",
-                "n_steps": 3,
-                "step_size": 0.02,
+                "steps": 3,
+                "stepsize": 0.02,
             },
         }
         shared = {"n_particles": 50, "n_iterations": 100}
         config, init_fn, step_fn, is_bl = build_algo_config(entry, shared)
         assert not is_bl
         assert config.mutation.kernel == "mala"
-        assert config.mutation.n_steps == 3
-        assert config.mutation.step_size == 0.02
+        assert config.mutation.steps == 3
+        assert config.mutation.stepsize == 0.02
 
     def test_mutation_default_off(self):
-        """Entry without mutation → MutationConfig(kernel='none')."""
+        """Entry without mutation -> MutationConfig(kernel='none')."""
         entry = {
             "label": "test",
             "coupling": "balanced",
             "epsilon": 0.1,
-            "alpha": 0.05,
-            "n_proposals": 10,
+            "proposal": {"alpha": 0.05, "count": 10},
         }
         shared = {"n_particles": 50, "n_iterations": 100}
         config, _, _, _ = build_algo_config(entry, shared)
@@ -399,7 +418,7 @@ class TestEnabledFlag:
         entries = [
             {"label": "ETD-B", "epsilon": 0.1},
             {"label": "ULA", "type": "baseline", "method": "ula",
-             "step_size": 0.01, "enabled": False},
+             "stepsize": 0.01, "enabled": False},
         ]
         active = [e for e in entries if e.get("enabled", True)]
         assert len(active) == 1
@@ -458,7 +477,7 @@ class TestDisplayMetaFiltering:
             "label": "ETD-B",
             "coupling": "balanced",
             "epsilon": 0.1,
-            "alpha": 0.05,
+            "proposal": {"alpha": 0.05},
             "display": {"family": "etd", "group": "transport"},
         }
         shared = {"n_particles": 50, "n_iterations": 100}
@@ -472,7 +491,7 @@ class TestDisplayMetaFiltering:
             "label": "SVGD",
             "type": "baseline",
             "method": "svgd",
-            "learning_rate": 0.1,
+            "stepsize": 0.1,
             "display": {"linestyle": "--"},
         }
         shared = {"n_particles": 50, "n_iterations": 100}
@@ -487,7 +506,7 @@ class TestDisplayMetaFiltering:
             "sublabel": "whitened",
             "coupling": "balanced",
             "epsilon": 0.1,
-            "alpha": 0.05,
+            "proposal": {"alpha": 0.05},
         }
         shared = {"n_particles": 50, "n_iterations": 100}
         config, _, _, _ = build_algo_config(entry, shared)
@@ -533,17 +552,17 @@ class TestResolveAlgoStyles:
     """Tests for the family-palette color resolver."""
 
     def test_family_inference_etd(self):
-        """ETD prefix → etd family."""
+        """ETD prefix -> etd family."""
         from figures.style import _infer_family
         assert _infer_family({"label": "ETD-B"}) == "etd"
 
     def test_family_inference_lret(self):
-        """LRET prefix → etd family."""
+        """LRET prefix -> etd family."""
         from figures.style import _infer_family
         assert _infer_family({"label": "LRET-B"}) == "etd"
 
     def test_family_inference_baseline(self):
-        """is_baseline flag → baseline family."""
+        """is_baseline flag -> baseline family."""
         from figures.style import _infer_family
         assert _infer_family({"label": "SVGD", "is_baseline": True}) == "baseline"
 

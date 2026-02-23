@@ -1,0 +1,77 @@
+experiment:
+  name: "blr-german"
+  seeds: [0, 1, 2, 3, 4]
+
+  target:
+    type: "blr"
+    params:
+      dataset: "german_credit"
+      prior_std: 5.0
+
+  shared:
+    n_particles: 100
+    n_iterations: 1000
+    init:
+      type: "gaussian"
+      scale: 0.1
+
+  checkpoints: [0, 10, 50, 100, 250, 500, 1000]
+
+  metrics:
+    - "sliced_wasserstein"
+    - "mean_rmse"
+    - "variance_ratio_ref"
+    - "mean_error"
+    - "energy_distance"
+    - "sinkhorn_iters"
+
+  algorithms:
+    - label: "ETD-B"
+      cost: "euclidean"
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      update: "categorical"
+      epsilon: 0.1
+      proposal:
+        count: 25
+        alpha: 0.01
+
+    - label: "ETD-B-Linf"
+      cost: "linf"
+      coupling:
+        type: "balanced"
+        tolerance: 1e-5
+      epsilon: 0.1
+      proposal:
+        count: 25
+        alpha: 0.01
+
+    - label: "ETD-B-IMQ"
+      cost:
+        type: "imq"
+        c: 1.0
+      coupling: "balanced"
+      epsilon: 0.1
+      proposal:
+        alpha: 0.01
+        count: 25
+
+    - label: "SVGD"
+      type: "baseline"
+      method: "svgd"
+      stepsize: 0.01
+      clip_score: 5.0
+
+    - label: "ULA"
+      type: "baseline"
+      method: "ula"
+      stepsize: 0.001
+      clip_score: 5.0
+
+    - label: "MALA"
+      type: "baseline"
+      method: "mala"
+      stepsize: 0.001
+      clip_score: 5.0
+      preconditioner: "cholesky"

@@ -355,23 +355,72 @@ def run_seeds_batched(
 
 
 # ---------------------------------------------------------------------------
-# Structural config grouping (for sweep parallelism in tune.py)
+# Nested config helpers (dotted-path access and replacement)
 # ---------------------------------------------------------------------------
 
-# Fields that affect JIT trace (Python-level branching, array shapes).
-# Sweeping these requires separate JIT compilations.
-_STRUCTURAL_FIELDS_ETD = frozenset({
-    "coupling", "cost", "cost_params", "cost_normalize", "update",
-    "n_particles", "n_proposals", "use_score", "fdr", "dv_feedback",
-    "sinkhorn_max_iter", "preconditioner", "mutation",
-    "precondition", "whiten",
-})
+def _get_nested(config: Any, dotted_key: str) -> Any:
+    """Get a value from a nested config via dotted path.
 
-# Fields that are purely arithmetic (safe as JAX tracers under vmap).
-_SCALAR_FIELDS_ETD = frozenset({
-    "epsilon", "alpha", "sigma", "score_clip",
-    "rho", "dv_weight", "sinkhorn_tol",
-})
+    Args:
+        config: Top-level config (ETDConfig, SDDConfig, etc.).
+        dotted_key: Dotted path like ``"proposal.alpha"`` or ``"epsilon"``.
+
+    Returns:
+        The resolved value.
+    """
+    obj = config
+    for part in dotted_key.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def replace_nested(config: Any, dotted_key: str, value: Any) -> Any:
+    """Replace a value in a nested config via dotted path.
+
+    Args:
+        config: Top-level config (frozen dataclass).
+        dotted_key: Dotted path like ``"proposal.alpha"`` or ``"epsilon"``.
+        value: New value.
+
+    Returns:
+        New config with the value replaced.
+    """
+    parts = dotted_key.split(".")
+    if len(parts) == 1:
+        return dataclasses.replace(config, **{parts[0]: value})
+    sub = getattr(config, parts[0])
+    new_sub = dataclasses.replace(sub, **{parts[1]: value})
+    return dataclasses.replace(config, **{parts[0]: new_sub})
+
+
+def _get_scalar_paths(config: Any) -> frozenset:
+    """Auto-detect scalar float fields as dotted paths.
+
+    Walks both top-level fields and one level of nested sub-config
+    dataclasses.  Only ``float``-typed fields are returned — these
+    are safe as JAX tracers under vmap.
+
+    Args:
+        config: Algorithm config (ETDConfig, SDDConfig, etc.).
+
+    Returns:
+        Frozenset of dotted paths like ``{"epsilon", "proposal.alpha", ...}``.
+    """
+    scalar_paths = set()
+    for f in dataclasses.fields(config):
+        val = getattr(config, f.name)
+        if dataclasses.is_dataclass(val) and f.name != "schedules":
+            for sf in dataclasses.fields(val):
+                if sf.type == "float" or sf.type == float:
+                    scalar_paths.add(f"{f.name}.{sf.name}")
+        elif (f.type == "float" or f.type == float) and f.name not in ("schedules",):
+            scalar_paths.add(f.name)
+    return frozenset(scalar_paths)
+
+
+# ---------------------------------------------------------------------------
+# Structural config grouping (for sweep parallelism in tune.py)
+# ---------------------------------------------------------------------------
 
 
 def structural_key(config: Any) -> tuple:
@@ -380,21 +429,40 @@ def structural_key(config: Any) -> tuple:
     Two configs with the same structural key share the same JIT trace
     and can be vmapped together (differing only in scalar parameters).
 
+    Auto-detects scalar float fields via ``_get_scalar_paths`` and
+    hashes everything else.  Nested sub-configs that are frozen
+    dataclasses are hashable directly.
+
     Args:
         config: Algorithm config (ETDConfig, SDDConfig, or baseline config).
 
     Returns:
         Hashable tuple of structural field values.
     """
+    scalar_paths = _get_scalar_paths(config)
     parts = []
     for f in dataclasses.fields(config):
-        if f.name in _STRUCTURAL_FIELDS_ETD:
-            val = getattr(config, f.name)
-            # Dataclass sub-configs (PreconditionerConfig, MutationConfig)
-            # are frozen and hashable
-            parts.append((f.name, val))
-        elif f.name == "schedules":
-            # Schedules are structural: they affect trace-time branching
+        val = getattr(config, f.name)
+        if dataclasses.is_dataclass(val):
+            # For sub-configs, exclude scalar float fields (they're vmapped)
+            # and include the rest as a hashable frozen dataclass.
+            # Build a version with scalar floats zeroed out for consistent hashing.
+            sub_scalar_names = {
+                p.split(".", 1)[1]
+                for p in scalar_paths
+                if p.startswith(f"{f.name}.")
+            }
+            if sub_scalar_names:
+                # Replace scalar floats with 0.0 so they don't affect the key
+                overrides = {name: 0.0 for name in sub_scalar_names}
+                normalized_sub = dataclasses.replace(val, **overrides)
+                parts.append((f.name, normalized_sub))
+            else:
+                parts.append((f.name, val))
+        elif f.name in scalar_paths:
+            # Skip top-level scalar floats — they're vmapped, not structural
+            continue
+        else:
             parts.append((f.name, val))
     return tuple(parts)
 
@@ -428,27 +496,27 @@ def group_configs_by_structure(
 def identify_varying_scalars(
     configs: List[Any],
 ) -> List[str]:
-    """Identify scalar fields that vary across a group of configs.
+    """Identify scalar float fields that vary across a group of configs.
+
+    Uses dotted paths for nested sub-config fields (e.g. ``"proposal.alpha"``).
 
     Args:
         configs: List of algorithm configs (same structural group).
 
     Returns:
-        List of field names that differ across configs and are in
-        ``_SCALAR_FIELDS_ETD``.
+        List of dotted-path field names that differ across configs.
     """
     if len(configs) <= 1:
         return []
 
+    scalar_paths = sorted(_get_scalar_paths(configs[0]))
     varying = []
     first = configs[0]
-    for f in dataclasses.fields(first):
-        if f.name not in _SCALAR_FIELDS_ETD:
-            continue
-        val0 = getattr(first, f.name)
+    for path in scalar_paths:
+        val0 = _get_nested(first, path)
         for c in configs[1:]:
-            if getattr(c, f.name) != val0:
-                varying.append(f.name)
+            if _get_nested(c, path) != val0:
+                varying.append(path)
                 break
     return varying
 
@@ -522,9 +590,10 @@ def _make_sweep_scan(
             start_iter: 1-based iteration index.
             n_steps: Number of steps (static).
         """
-        # Replace scalar fields with tracer values
-        overrides = dict(zip(sweep_field_names, scalar_vals))
-        config = dataclasses.replace(base_config, **overrides)
+        # Replace scalar fields with tracer values (supports dotted paths)
+        config = base_config
+        for name, val in zip(sweep_field_names, scalar_vals):
+            config = replace_nested(config, name, val)
 
         def scan_body(carry, t_offset):
             t = start_iter + t_offset
@@ -637,7 +706,7 @@ def run_sweep_batched(
 
     # Build scalar value arrays: tuple of (C,) arrays
     scalar_vals_all = tuple(
-        jnp.array([float(getattr(c, name)) for c in configs])
+        jnp.array([float(_get_nested(c, name)) for c in configs])
         for name in sweep_field_names
     )
 

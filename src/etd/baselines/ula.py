@@ -27,13 +27,13 @@ class ULAConfig:
     Attributes:
         n_particles: Number of particles (*N*).
         n_iterations: Total iterations.
-        step_size: Langevin step size (*h*).
-        score_clip: Maximum score norm (default 5.0).
+        stepsize: Langevin step size (*h*).
+        clip_score: Maximum score norm (default 5.0).
     """
     n_particles: int = 100
     n_iterations: int = 500
-    step_size: float = 0.01
-    score_clip: float = 5.0
+    stepsize: float = 0.01
+    clip_score: float = 5.0
 
 
 class ULAState(NamedTuple):
@@ -95,8 +95,8 @@ def step(
         Tuple ``(new_state, info)`` where info contains
         ``"score_norm"`` (mean score norm).
     """
-    h = config.step_size
-    scores = clip_scores(target.score(state.positions), config.score_clip)
+    h = config.stepsize
+    scores = clip_scores(target.score(state.positions), config.clip_score)
     noise = jax.random.normal(key, state.positions.shape)
 
     new_positions = state.positions + h * scores + jnp.sqrt(2.0 * h) * noise

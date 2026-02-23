@@ -56,7 +56,7 @@ def eval_schedule(schedule: Schedule, step: int, n_iterations: int) -> jnp.ndarr
     """
     if schedule.kind == "linear_warmup":
         if schedule.warmup == 0:
-            # No warmup → constant at value.
+            # No warmup -> constant at value.
             return jnp.float32(schedule.value)
         t = jnp.clip(step / schedule.warmup, 0.0, 1.0)
         return schedule.end + (schedule.value - schedule.end) * t
@@ -73,6 +73,22 @@ def eval_schedule(schedule: Schedule, step: int, n_iterations: int) -> jnp.ndarr
         raise ValueError(f"Unknown schedule kind '{schedule.kind}'")
 
 
+def _resolve_dotted(obj, dotted_name: str):
+    """Resolve a dotted attribute path on a config object.
+
+    Args:
+        obj: Root config object.
+        dotted_name: Attribute path, e.g. ``"proposal.alpha"``
+            or ``"epsilon"`` (no dots).
+
+    Returns:
+        The resolved attribute value.
+    """
+    for part in dotted_name.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
 def resolve_param(config, name: str, step: int):
     """Resolve a parameter, applying its schedule if one exists.
 
@@ -80,9 +96,12 @@ def resolve_param(config, name: str, step: int):
     ``(param_name, Schedule)`` pairs).  If found, evaluates the
     schedule at ``step``; otherwise returns the static config value.
 
+    Supports dotted paths for nested sub-configs:
+    ``"proposal.alpha"`` resolves to ``config.proposal.alpha``.
+
     Args:
         config: ETDConfig (frozen, static for JIT).
-        name: Parameter name (e.g. ``"dv_weight"``).
+        name: Parameter name (e.g. ``"epsilon"`` or ``"proposal.alpha"``).
         step: Current iteration (may be traced).
 
     Returns:
@@ -91,4 +110,4 @@ def resolve_param(config, name: str, step: int):
     for param_name, sched in config.schedules:
         if param_name == name:
             return eval_schedule(sched, step, config.n_iterations)
-    return getattr(config, name)
+    return _resolve_dotted(config, name)

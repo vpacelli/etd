@@ -31,18 +31,18 @@ class SVGDConfig:
     Attributes:
         n_particles: Number of particles (*N*).
         n_iterations: Total iterations.
-        learning_rate: Adam learning rate.
+        stepsize: Adam learning rate.
         bandwidth: Kernel bandwidth. ``-1.0`` triggers median heuristic.
-        score_clip: Maximum score norm (default 5.0).
-        adam_b1: Adam β₁ (default 0.9).
-        adam_b2: Adam β₂ (default 0.999).
-        adam_eps: Adam ε (default 1e-8).
+        clip_score: Maximum score norm (default 5.0).
+        adam_b1: Adam beta_1 (default 0.9).
+        adam_b2: Adam beta_2 (default 0.999).
+        adam_eps: Adam epsilon (default 1e-8).
     """
     n_particles: int = 100
     n_iterations: int = 500
-    learning_rate: float = 0.01
+    stepsize: float = 0.01
     bandwidth: float = -1.0
-    score_clip: float = 5.0
+    clip_score: float = 5.0
     adam_b1: float = 0.9
     adam_b2: float = 0.999
     adam_eps: float = 1e-8
@@ -173,7 +173,7 @@ def step(
     positions = state.positions
 
     # 1. Clipped scores
-    scores = clip_scores(target.score(positions), config.score_clip)
+    scores = clip_scores(target.score(positions), config.clip_score)
 
     # 2. Bandwidth: median heuristic or fixed
     sq_dists = _squared_distances(positions)
@@ -199,7 +199,7 @@ def step(
     m_hat = new_m / (1.0 - config.adam_b1 ** t)
     v_hat = new_v / (1.0 - config.adam_b2 ** t)
 
-    new_positions = positions + config.learning_rate * m_hat / (jnp.sqrt(v_hat) + config.adam_eps)
+    new_positions = positions + config.stepsize * m_hat / (jnp.sqrt(v_hat) + config.adam_eps)
 
     phi_norm = jnp.mean(jnp.linalg.norm(phi, axis=-1))
     info = {"bandwidth": h, "phi_norm": phi_norm}

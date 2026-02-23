@@ -1,7 +1,19 @@
 """Core types for Entropic Transport Descent.
 
-Defines the Target protocol, ETDState, and ETDConfig used throughout the
-algorithm. These are the foundational types that all other modules reference.
+Defines the Target protocol, sub-config dataclasses, ETDState, and ETDConfig
+used throughout the algorithm. These are the foundational types that all
+other modules reference.
+
+Sub-config hierarchy::
+
+    ETDConfig
+    ├── ProposalConfig     — proposal generation (count, drift, noise, clipping)
+    ├── CostConfig         — transport cost (type, normalization, params)
+    ├── CouplingConfig     — Sinkhorn coupling (type, iterations, tolerance)
+    ├── UpdateConfig       — particle update (type, damping)
+    ├── PreconditionerConfig — diagonal/Cholesky preconditioning
+    ├── MutationConfig     — post-transport MCMC mutation
+    └── FeedbackConfig     — Donsker-Varadhan feedback signal
 """
 
 from __future__ import annotations
@@ -39,7 +51,7 @@ class Target(Protocol):
         ...
 
     def score(self, x: jnp.ndarray) -> jnp.ndarray:
-        """Evaluate score function ∇ log π(x).
+        """Evaluate score function nabla log pi(x).
 
         Args:
             x: Positions, shape ``(N, d)``.
@@ -48,6 +60,160 @@ class Target(Protocol):
             Score vectors, shape ``(N, d)``.
         """
         ...
+
+
+# ---------------------------------------------------------------------------
+# Proposal config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ProposalConfig:
+    """Configuration for Langevin proposal generation.
+
+    Controls the drift-diffusion process that generates proposal
+    particles:  ``y = x + alpha * s(x) + sigma * noise``.
+
+    Attributes:
+        type: Proposal type: ``"score"`` (score-guided) or
+            ``"score_free"`` (pure noise).
+        count: Number of proposals *M* per iteration (pooled across
+            all particles).
+        alpha: Drift step size for Langevin dynamics.
+        fdr: Fluctuation-dissipation relation: ``sigma = sqrt(2*alpha)``.
+        sigma: Explicit noise scale; required when ``score_free`` or
+            ``fdr=False``.  ``0.0`` is a sentinel meaning "use FDR".
+        clip_score: Maximum score norm for gradient clipping.
+            ``0.0`` or ``inf`` disables clipping.
+    """
+
+    type: str = "score"          # "score" | "score_free"
+    count: int = 25              # M proposals
+    alpha: float = 0.05          # drift step size
+    fdr: bool = True             # sigma = sqrt(2*alpha)
+    sigma: float = 0.0           # explicit; required when score_free or fdr=False
+    clip_score: float = 5.0      # max score norm; 0 or inf = no clipping
+
+    @property
+    def use_score(self) -> bool:
+        """Whether proposals use score information."""
+        return self.type == "score"
+
+    @property
+    def resolved_sigma(self) -> float:
+        """Return the proposal noise scale.
+
+        When ``fdr=True``, sigma = sqrt(2*alpha).
+        Otherwise, ``sigma`` must have been set explicitly.
+        """
+        if self.fdr:
+            return (2.0 * self.alpha) ** 0.5
+        if self.sigma > 0.0:
+            return self.sigma
+        raise ValueError("sigma must be > 0 when fdr=False")
+
+
+# ---------------------------------------------------------------------------
+# Cost config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CostConfig:
+    """Configuration for the transport cost function.
+
+    Attributes:
+        type: Cost type: ``"euclidean"``, ``"linf"``, ``"imq"``,
+            or ``"langevin"``.
+        normalize: Normalization strategy: ``"median"`` or ``"mean"``.
+        params: Extra parameters as sorted ``(key, value)`` pairs,
+            e.g. ``(("c", 1.0),)`` for IMQ or ``(("whiten", True),)``
+            for Langevin cost whitening.
+    """
+
+    type: str = "euclidean"      # "euclidean" | "linf" | "imq" | "langevin"
+    normalize: str = "median"    # "median" | "mean"
+    params: tuple = ()           # sorted (key, value) pairs
+
+    @property
+    def whiten(self) -> bool:
+        """Whether cost whitening is enabled (from params dict)."""
+        return dict(self.params).get("whiten", False)
+
+
+# ---------------------------------------------------------------------------
+# Coupling config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CouplingConfig:
+    """Configuration for the Sinkhorn coupling.
+
+    Attributes:
+        type: Coupling type: ``"balanced"``, ``"unbalanced"``,
+            or ``"gibbs"`` (closed-form, testing only).
+        iterations: Maximum Sinkhorn iterations.
+        tolerance: Sinkhorn convergence tolerance.
+        rho: Unbalanced only: tau/epsilon ratio.
+    """
+
+    type: str = "balanced"       # "balanced" | "unbalanced" | "gibbs"
+    iterations: int = 50         # Sinkhorn max iters
+    tolerance: float = 1e-2      # Sinkhorn convergence
+    rho: float = 1.0             # unbalanced only: tau/epsilon
+
+
+# ---------------------------------------------------------------------------
+# Update config
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class UpdateConfig:
+    """Configuration for the particle update rule.
+
+    Attributes:
+        type: Update type: ``"categorical"`` (systematic resampling)
+            or ``"barycentric"`` (weighted mean).
+        damping: Step size damping in ``(0, 1]``.  Always applied
+            (identity when 1.0, branchless).
+    """
+
+    type: str = "categorical"    # "categorical" | "barycentric"
+    damping: float = 1.0         # (0, 1]
+
+
+# ---------------------------------------------------------------------------
+# Feedback config (Donsker-Varadhan)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FeedbackConfig:
+    """Configuration for DV feedback signal.
+
+    Attributes:
+        enabled: Whether DV feedback is active.
+        weight: Scaling weight for the feedback signal.
+    """
+
+    enabled: bool = False
+    weight: float = 1.0
+
+
+# ---------------------------------------------------------------------------
+# Self-coupling config (SDD only)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SelfCouplingConfig:
+    """Configuration for SDD self-coupling (N x N between particles).
+
+    Attributes:
+        epsilon: Regularization for self-coupling Sinkhorn.
+        iterations: Maximum Sinkhorn iterations.
+        tolerance: Sinkhorn convergence tolerance.
+    """
+
+    epsilon: float = 0.1
+    iterations: int = 50
+    tolerance: float = 1e-2
 
 
 # ---------------------------------------------------------------------------
@@ -66,26 +232,29 @@ class PreconditionerConfig:
         proposals: Apply preconditioner to proposal drift and noise.
         cost: Apply preconditioner to cost matrix whitening.
         source: Data source for covariance: ``"scores"`` or ``"positions"``.
-        use_unclipped_scores: Use raw (unclipped) scores when ``source="scores"``.
+        clip_score: Score clipping for preconditioner data.
+            ``0.0`` (default) = inherit parent config's clipping.
+            ``inf`` = use raw (unclipped) scores.
+            Positive value = clip to that threshold.
         beta: RMSProp EMA decay for the diagonal accumulator.
         delta: Regularization floor for diagonal ``P = 1/sqrt(G + delta)``.
         shrinkage: Ledoit-Wolf shrinkage toward the diagonal (Cholesky only).
         jitter: Diagonal jitter for positive-definiteness (Cholesky only).
-        ema_beta: EMA on covariance: 0.0 = fresh each step (Cholesky only).
+        ema: EMA on covariance: 0.0 = fresh each step (Cholesky only).
     """
 
     type: str = "none"                # "none" | "rmsprop" | "cholesky"
     proposals: bool = False           # apply to proposal drift + noise
     cost: bool = False                # apply to cost matrix whitening
     source: str = "scores"            # "scores" | "positions"
-    use_unclipped_scores: bool = False
+    clip_score: float = 0.0           # 0 = inherit parent; inf = raw/unclipped
     # RMSProp
     beta: float = 0.9
     delta: float = 1e-8
     # Cholesky
     shrinkage: float = 0.1           # toward diagonal
     jitter: float = 1e-6             # PD guarantee
-    ema_beta: float = 0.0            # 0.0 = fresh each step
+    ema: float = 0.0                 # 0.0 = fresh each step
 
     def __post_init__(self):
         if self.is_rmsprop and self.source != "scores":
@@ -110,33 +279,15 @@ class PreconditionerConfig:
     def is_rmsprop(self) -> bool:
         return self.type == "rmsprop"
 
+    @property
+    def use_raw_scores(self) -> bool:
+        """Whether to use raw (unclipped) scores for preconditioner data.
 
-def make_preconditioner_config(
-    precondition: bool = False,
-    whiten: bool = False,
-    precond_beta: float = 0.9,
-    precond_delta: float = 1e-8,
-) -> PreconditionerConfig:
-    """Build a PreconditionerConfig from legacy flat fields.
-
-    Args:
-        precondition: Apply RMSProp to proposals.
-        whiten: Apply RMSProp to cost whitening.
-        precond_beta: RMSProp EMA decay.
-        precond_delta: RMSProp regularization.
-
-    Returns:
-        Equivalent :class:`PreconditionerConfig`.
-    """
-    if not precondition and not whiten:
-        return PreconditionerConfig()
-    return PreconditionerConfig(
-        type="rmsprop",
-        proposals=precondition,
-        cost=whiten,
-        beta=precond_beta,
-        delta=precond_delta,
-    )
+        - ``clip_score == 0.0`` (default): inherit parent's clipping → **False**
+        - ``clip_score == inf``: explicit raw/unclipped → **True**
+        - ``clip_score > 0``: clip to that threshold (future use) → **False**
+        """
+        return self.clip_score == float("inf")
 
 
 # ---------------------------------------------------------------------------
@@ -148,25 +299,25 @@ class MutationConfig:
     """Configuration for post-transport MCMC mutation.
 
     Adds MCMC mutation steps after transport resampling, completing the
-    SMC structure: reweight → resample → mutate.  The mutation is
-    π-invariant (MH correction), so it can only improve or maintain
+    SMC structure: reweight -> resample -> mutate.  The mutation is
+    pi-invariant (MH correction), so it can only improve or maintain
     approximation quality.
 
     Attributes:
         kernel: MCMC kernel type: ``"none"``, ``"mala"``, or ``"rwm"``.
-        n_steps: Number of MCMC sub-steps per ETD iteration (static for
+        steps: Number of MCMC sub-steps per ETD iteration (static for
             ``lax.scan``).
-        step_size: MALA/RWM step size *h*.
-        use_cholesky: Use ensemble Cholesky factor for proposal covariance.
-        score_clip: Score clipping threshold for MALA.  ``None`` inherits
-            from the parent config's ``score_clip``.
+        stepsize: MALA/RWM step size *h*.
+        cholesky: Use ensemble Cholesky factor for proposal covariance.
+        clip_score: Score clipping threshold for MALA.  ``None`` inherits
+            from the parent config's ``proposal.clip_score``.
     """
 
     kernel: str = "none"              # "none" | "mala" | "rwm"
-    n_steps: int = 5                  # MCMC sub-steps per ETD iteration
-    step_size: float = 0.01           # MALA/RWM step size h
-    use_cholesky: bool = True         # Use ensemble Cholesky for proposal cov
-    score_clip: Optional[float] = None  # None → inherit from parent config
+    steps: int = 5                    # MCMC sub-steps per ETD iteration
+    stepsize: float = 0.01            # MALA/RWM step size h
+    cholesky: bool = True             # Use ensemble Cholesky for proposal cov
+    clip_score: Optional[float] = None  # None -> inherit from parent config
 
     @property
     def active(self) -> bool:
@@ -197,13 +348,13 @@ class ETDState(NamedTuple):
         dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
             Clean c-transformed potential (without ``log_b`` contamination)
             interpolated between source and target potentials.
-        log_prob: Cached log π(x) from mutation, shape ``(N,)``.
+        log_prob: Cached log pi(x) from mutation, shape ``(N,)``.
             Zeros when mutation is off.
         scores: Cached clipped scores from mutation, shape ``(N, d)``.
             Zeros when mutation is off or using RWM.
         precond_accum: RMSProp-style accumulator for diagonal
             preconditioner, shape ``(d,)``.  Initialized to **ones**
-            (it appears as a denominator via ``1 / sqrt(G + δ)``).
+            (it appears as a denominator via ``1 / sqrt(G + delta)``).
         cholesky_factor: Lower-triangular Cholesky factor of the ensemble
             covariance, shape ``(d, d)``.  Initialized to ``eye(d)``.
             Only updated when ``preconditioner.type == "cholesky"``.
@@ -232,70 +383,61 @@ class ETDConfig:
     Frozen so it can be used as a ``static_argnums`` argument to
     ``jax.jit``.  Each distinct config triggers XLA recompilation,
     so Python ``if`` on config fields is resolved at trace time.
+
+    Sub-configs group related parameters by algorithmic component:
+    proposal, cost, coupling, update, preconditioner, mutation, feedback.
     """
 
     # --- Scale ---
     n_particles: int = 100
     n_iterations: int = 500
-    n_proposals: int = 25
-
-    # --- Composable axes (string names → resolved to functions at build) ---
-    cost: str = "euclidean"
-    cost_params: tuple = ()   # sorted (key, value) pairs, e.g. (("c", 1.0),)
-    cost_normalize: str = "median"   # "median" or "mean"
-    coupling: str = "balanced"
-    update: str = "categorical"
 
     # --- Core ---
     epsilon: float = 0.1
-    alpha: float = 0.05
-    fdr: bool = True
-    sigma: float = 0.0          # only used when fdr=False; 0.0 sentinel
-    use_score: bool = True
-    score_clip: float = 5.0
 
-    # --- Coupling ---
-    rho: float = 1.0            # unbalanced only: τ/ε
-    sinkhorn_max_iter: int = 50
-    sinkhorn_tol: float = 1e-2
-
-    # --- Update ---
-    step_size: float = 1.0      # damping in (0, 1]
-
-    # --- Preconditioner ---
+    # --- Nested sub-configs ---
+    proposal: ProposalConfig = field(default_factory=ProposalConfig)
+    cost: CostConfig = field(default_factory=CostConfig)
+    coupling: CouplingConfig = field(default_factory=CouplingConfig)
+    update: UpdateConfig = field(default_factory=UpdateConfig)
     preconditioner: PreconditionerConfig = field(
         default_factory=PreconditionerConfig,
     )
-
-    # --- Mutation (MCMC post-transport) ---
-    mutation: MutationConfig = field(
-        default_factory=MutationConfig,
-    )
-
-    # Legacy compat — populated by make_preconditioner_config() in the runner.
-    # Deprecated: use ``preconditioner`` instead.
-    precondition: bool = False
-    whiten: bool = False
-    precond_beta: float = 0.9
-    precond_delta: float = 1e-8
-
-    # --- DV feedback ---
-    dv_feedback: bool = False
-    dv_weight: float = 1.0
+    mutation: MutationConfig = field(default_factory=MutationConfig)
+    feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
 
     # --- Schedules ---
-    schedules: tuple = ()  # (("dv_weight", Schedule(...)), ("epsilon", Schedule(...)), ...)
+    schedules: tuple = ()  # (("epsilon", Schedule(...)), ("proposal.alpha", Schedule(...)), ...)
 
     def __post_init__(self):
+        # cost="langevin" + proposal="score_free" -> ERROR
+        if self.cost.type == "langevin" and not self.proposal.use_score:
+            raise ValueError(
+                "cost.type='langevin' requires score-guided proposals "
+                "(proposal.type='score')"
+            )
+
+        # proposal="score_free" + no sigma -> ERROR
+        if (
+            not self.proposal.use_score
+            and not self.proposal.fdr
+            and self.proposal.sigma <= 0
+        ):
+            raise ValueError(
+                "proposal.type='score_free' with fdr=False requires "
+                "explicit sigma > 0"
+            )
+
+        # mutation.cholesky + preconditioner="none" -> WARNING
         if (
             self.mutation.active
-            and self.mutation.use_cholesky
+            and self.mutation.cholesky
             and not self.preconditioner.is_cholesky
         ):
             warnings.warn(
-                "mutation.use_cholesky=True but preconditioner.type is not "
+                "mutation.cholesky=True but preconditioner.type is not "
                 "'cholesky'. A Cholesky factor will be auto-computed for "
-                "mutation each step (O(Nd² + d³)). Consider enabling "
+                "mutation each step (O(Nd^2 + d^3)). Consider enabling "
                 "Cholesky preconditioning to share the computation.",
                 UserWarning,
                 stacklevel=2,
@@ -305,27 +447,10 @@ class ETDConfig:
     def needs_cholesky(self) -> bool:
         """Whether a Cholesky factor is needed (preconditioner or mutation)."""
         return self.preconditioner.is_cholesky or (
-            self.mutation.active and self.mutation.use_cholesky
+            self.mutation.active and self.mutation.cholesky
         )
 
     @property
     def needs_precond_accum(self) -> bool:
-        """Whether any preconditioner is active.
-
-        Returns True when the new ``preconditioner`` config is active
-        **or** the legacy ``precondition``/``whiten`` flags are set.
-        """
-        return self.preconditioner.active or self.precondition or self.whiten
-
-    @property
-    def resolved_sigma(self) -> float:
-        """Return the proposal noise scale.
-
-        When ``fdr=True``, σ = √(2α) (fluctuation-dissipation relation).
-        Otherwise, ``sigma`` must have been set explicitly.
-        """
-        if self.fdr:
-            return (2.0 * self.alpha) ** 0.5
-        if self.sigma > 0.0:
-            return self.sigma
-        raise ValueError("sigma must be > 0 when fdr=False")
+        """Whether the RMSProp accumulator is needed."""
+        return self.preconditioner.active

@@ -174,7 +174,7 @@ class TestULAConvergence:
     """ULA on isotropic Gaussian(d=2) should converge in 200 steps."""
 
     def test_mean_error(self, gaussian_target):
-        cfg = ULAConfig(n_particles=100, step_size=0.01, n_iterations=200)
+        cfg = ULAConfig(n_particles=100, stepsize=0.01, n_iterations=200)
         key = jax.random.PRNGKey(0)
         k_init, k_run = jax.random.split(key)
         state = ula_init(k_init, gaussian_target, cfg)
@@ -191,7 +191,7 @@ class TestSVGDConvergence:
     """SVGD on isotropic Gaussian(d=2) should converge in 200 steps."""
 
     def test_mean_error(self, gaussian_target):
-        cfg = SVGDConfig(n_particles=100, learning_rate=0.1, n_iterations=200)
+        cfg = SVGDConfig(n_particles=100, stepsize=0.1, n_iterations=200)
         key = jax.random.PRNGKey(0)
         state = svgd_init(key, gaussian_target, cfg)
 

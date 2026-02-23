@@ -14,7 +14,11 @@ import jax.numpy as jnp
 from etd.diagnostics.metrics import mode_proximity
 from etd.step import init, step
 from etd.targets.gmm import GMMTarget
-from etd.types import ETDConfig
+from etd.types import (
+    CouplingConfig,
+    ETDConfig,
+    ProposalConfig,
+)
 from figures.style import (
     FULL_WIDTH,
     plot_contours,
@@ -31,12 +35,11 @@ def main():
     # --- Setup ---
     target = GMMTarget(dim=2, n_modes=4, arrangement="grid", separation=6.0)
     config = ETDConfig(
-        coupling="balanced",
-        epsilon=0.1,
-        alpha=0.05,
         n_particles=100,
-        n_proposals=25,
         n_iterations=500,
+        epsilon=0.1,
+        proposal=ProposalConfig(count=25, alpha=0.05),
+        coupling=CouplingConfig(type="balanced"),
     )
 
     key = jax.random.PRNGKey(42)

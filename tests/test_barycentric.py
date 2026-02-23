@@ -157,10 +157,10 @@ class TestIntegration:
         """10 iterations of ETD with barycentric update, no errors."""
         from etd.step import init, step
         from etd.targets.gaussian import GaussianTarget
-        from etd.types import ETDConfig
+        from conftest import make_test_config
 
         target = GaussianTarget(dim=2)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20,
             n_proposals=10,
             n_iterations=10,

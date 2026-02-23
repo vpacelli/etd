@@ -1,0 +1,121 @@
+experiment:
+  name: "CHANGE_ME"            # <-- REQUIRED
+  seeds: [0, 1, 2]
+
+  target:
+    type: "CHANGE_ME"           # <-- REQUIRED: "gmm" | "banana" | "funnel" | "blr"
+    params:
+      dim: 2                    # <-- adjust for your target
+      # GMM: n_modes, arrangement, separation, component_std
+      # Banana: curvature, offset, sigma1, sigma2
+      # Funnel: sigma_v
+      # BLR: dataset, prior_std
+
+  shared:
+    n_particles: 100
+    n_iterations: 500
+    init:
+      type: "gaussian"
+      scale: 5.0
+
+  checkpoints: [0, 1, 10, 50, 100, 200, 500]
+
+  metrics:
+    - "energy_distance"
+    - "sliced_wasserstein"
+    - "coupling_ess"
+
+  algorithms:
+    # --- ETD (balanced, score-guided) ---
+    - label: "ETD-B"
+      epsilon: 0.1
+      proposal:
+        type: "score"
+        count: 25
+        alpha: 0.05
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+
+    # --- ETD with Cholesky preconditioning ---
+    - label: "ETD-B-Chol"
+      epsilon: 0.1
+      proposal:
+        type: "score"
+        count: 25
+        alpha: 0.05
+      cost: "euclidean"
+      coupling: "balanced"
+      update: "categorical"
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+        source: "positions"
+        shrinkage: 0.1
+        ema: 0.8
+
+    # --- LRET (Langevin-residual cost) ---
+    - label: "LRET-B"
+      epsilon: 0.1
+      cost: "langevin"
+      coupling: "balanced"
+      # proposal.alpha auto-set to epsilon when fdr=true
+
+    # --- ETD + MALA mutation ---
+    - label: "ETD-B+MALA"
+      epsilon: 0.1
+      proposal:
+        type: "score"
+        count: 25
+        alpha: 0.05
+      cost: "euclidean"
+      coupling: "balanced"
+      mutation:
+        kernel: "mala"
+        steps: 5
+        stepsize: 0.01
+        cholesky: true
+      preconditioner:
+        type: "cholesky"
+        proposals: true
+        cost: true
+
+    # --- SDD (Sinkhorn Divergence Descent) ---
+    - label: "SDD"
+      method: "sdd"
+      epsilon: 0.1
+      proposal:
+        type: "score"
+        count: 25
+        alpha: 0.05
+      cost: "euclidean"
+      self_coupling:
+        epsilon: 0.1
+      eta: 0.5
+
+    # --- Baselines ---
+    - label: "SVGD"
+      type: "baseline"
+      method: "svgd"
+      stepsize: 0.01
+      clip_score: 5.0
+
+    - label: "MALA"
+      type: "baseline"
+      method: "mala"
+      stepsize: 0.01
+      clip_score: 5.0
+
+    - label: "ULA"
+      type: "baseline"
+      method: "ula"
+      stepsize: 0.01
+      clip_score: 5.0
+
+    - label: "MPPI"
+      type: "baseline"
+      method: "mppi"
+      sigma: 0.316
+      n_proposals: 25
+      temperature: 1.0

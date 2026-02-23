@@ -28,7 +28,7 @@ This is research code for a paper, not production software.
 etd/
 ├── src/etd/
 │   ├── __init__.py
-│   ├── types.py                    # Target protocol, ETDState, MutationConfig
+│   ├── types.py                    # Target protocol, ETDState, ETDConfig, sub-configs
 │   │
 │   ├── costs/                      # Cost matrix construction
 │   │   ├── __init__.py             # get_cost_fn() registry
@@ -84,8 +84,15 @@ etd/
 │
 ├── experiments/
 │   ├── run.py                      # YAML → run → save
+│   ├── _parallel.py                # Batched seed execution (vmap)
+│   ├── tune.py                     # Optuna / grid-sweep tuning
 │   ├── configs/                    # YAML experiment definitions
-│   │   └── sweeps/                 # Multi-parameter sweeps
+│   │   ├── gmm/                    # Gaussian mixture targets
+│   │   ├── banana/                 # Banana targets
+│   │   ├── funnel/                 # Neal's funnel targets
+│   │   ├── blr/                    # Bayesian logistic regression
+│   │   ├── sweeps/                 # Multi-parameter sweeps
+│   │   └── template.yaml           # Annotated starting template
 │   └── scripts/                    # One-off analysis scripts
 │
 ├── figures/

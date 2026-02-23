@@ -216,8 +216,8 @@ def mutate(
           and N particles).
     """
     N, d = positions.shape
-    h = mutation_config.step_size
-    K = mutation_config.n_steps
+    h = mutation_config.stepsize
+    K = mutation_config.steps
 
     # Fresh log-prob evaluation (post-transport positions have no cache)
     log_pi = target.log_prob(positions)  # (N,)

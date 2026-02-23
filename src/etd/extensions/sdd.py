@@ -9,7 +9,7 @@ SDD update:
 
 where:
     y_cross[i]    : resampled proposal from cross-coupling
-    x_bar_self[i] : barycentric mean from self-coupling (N×N)
+    x_bar_self[i] : barycentric mean from self-coupling (N x N)
 """
 
 from __future__ import annotations
@@ -26,13 +26,23 @@ from etd.costs import build_cost_fn, normalize_cost
 from etd.costs.langevin import langevin_residual_cost
 from etd.coupling import sinkhorn_log_domain
 from etd.primitives.mutation import mutate
-from etd.proposals.langevin import langevin_proposals, update_preconditioner
+from etd.proposals.langevin import langevin_proposals
 from etd.proposals.preconditioner import (
     compute_ensemble_cholesky,
     update_rmsprop_accum,
 )
-from etd.schedule import Schedule, resolve_param
-from etd.types import MutationConfig, PreconditionerConfig, Target
+from etd.schedule import resolve_param
+from etd.types import (
+    CostConfig,
+    CouplingConfig,
+    FeedbackConfig,
+    MutationConfig,
+    PreconditionerConfig,
+    ProposalConfig,
+    SelfCouplingConfig,
+    Target,
+    UpdateConfig,
+)
 from etd.update import systematic_resample
 from etd.weights import importance_weights
 
@@ -53,7 +63,7 @@ class SDDState(NamedTuple):
         dual_f_self: Self-coupling source duals, shape ``(N,)``.
         dual_g_self: Self-coupling target duals, shape ``(N,)``.
         dv_potential: Per-particle DV feedback signal, shape ``(N,)``.
-        log_prob: Cached log π(x) from mutation, shape ``(N,)``.
+        log_prob: Cached log pi(x) from mutation, shape ``(N,)``.
             Zeros when mutation is off.
         scores: Cached clipped scores from mutation, shape ``(N, d)``.
             Zeros when mutation is off or using RWM.
@@ -79,60 +89,32 @@ class SDDState(NamedTuple):
 class SDDConfig:
     """Configuration for SDD-RB.
 
-    Mirrors core ETD fields plus SDD-specific parameters.
+    Mirrors core ETD sub-configs plus SDD-specific parameters.
     """
 
     # --- Scale ---
     n_particles: int = 100
     n_iterations: int = 500
-    n_proposals: int = 25
-
-    # --- Composable axes ---
-    cost: str = "euclidean"
-    cost_params: tuple = ()
-    cost_normalize: str = "median"   # "median" or "mean"
 
     # --- Core ---
     epsilon: float = 0.1
-    alpha: float = 0.05
-    fdr: bool = True
-    sigma: float = 0.0
-    use_score: bool = True
-    score_clip: float = 5.0
 
-    # --- Cross-coupling (balanced Sinkhorn) ---
-    sinkhorn_max_iter: int = 50
-    sinkhorn_tol: float = 1e-2
-
-    # --- Self-coupling ---
-    self_epsilon: float = 0.1
-    self_sinkhorn_max_iter: int = 50
-    self_sinkhorn_tol: float = 1e-2
-
-    # --- SDD update ---
-    sdd_step_size: float = 0.5   # eta for displacement
-
-    # --- Preconditioner ---
+    # --- Nested sub-configs ---
+    proposal: ProposalConfig = field(default_factory=ProposalConfig)
+    cost: CostConfig = field(default_factory=CostConfig)
+    coupling: CouplingConfig = field(default_factory=CouplingConfig)
+    update: UpdateConfig = field(default_factory=UpdateConfig)
     preconditioner: PreconditionerConfig = field(
         default_factory=PreconditionerConfig,
     )
+    mutation: MutationConfig = field(default_factory=MutationConfig)
+    feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
 
-    # --- Mutation (MCMC post-transport) ---
-    mutation: MutationConfig = field(
-        default_factory=MutationConfig,
+    # --- SDD-specific ---
+    self_coupling: SelfCouplingConfig = field(
+        default_factory=SelfCouplingConfig,
     )
-
-    precondition: bool = False
-    whiten: bool = False
-    precond_beta: float = 0.9
-    precond_delta: float = 1e-8
-
-    # --- DV feedback ---
-    dv_feedback: bool = False
-    dv_weight: float = 1.0
-
-    # --- Update ---
-    step_size: float = 1.0  # damping for cross-coupling categorical
+    eta: float = 0.5  # SDD displacement step size
 
     # --- Schedules ---
     schedules: tuple = ()
@@ -140,13 +122,13 @@ class SDDConfig:
     def __post_init__(self):
         if (
             self.mutation.active
-            and self.mutation.use_cholesky
+            and self.mutation.cholesky
             and not self.preconditioner.is_cholesky
         ):
             warnings.warn(
-                "mutation.use_cholesky=True but preconditioner.type is not "
+                "mutation.cholesky=True but preconditioner.type is not "
                 "'cholesky'. A Cholesky factor will be auto-computed for "
-                "mutation each step (O(Nd² + d³)). Consider enabling "
+                "mutation each step (O(Nd^2 + d^3)). Consider enabling "
                 "Cholesky preconditioning to share the computation.",
                 UserWarning,
                 stacklevel=2,
@@ -156,21 +138,13 @@ class SDDConfig:
     def needs_cholesky(self) -> bool:
         """Whether a Cholesky factor is needed (preconditioner or mutation)."""
         return self.preconditioner.is_cholesky or (
-            self.mutation.active and self.mutation.use_cholesky
+            self.mutation.active and self.mutation.cholesky
         )
 
     @property
     def needs_precond_accum(self) -> bool:
-        """Whether any preconditioner is active."""
-        return self.preconditioner.active or self.precondition or self.whiten
-
-    @property
-    def resolved_sigma(self) -> float:
-        if self.fdr:
-            return (2.0 * self.alpha) ** 0.5
-        if self.sigma > 0.0:
-            return self.sigma
-        raise ValueError("sigma must be > 0 when fdr=False")
+        """Whether the RMSProp accumulator is needed."""
+        return self.preconditioner.active
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +170,7 @@ def init(
     """
     N = config.n_particles
     d = target.dim
-    M = config.n_proposals
+    M = config.proposal.count
 
     if init_positions is None:
         positions = jax.random.normal(key, (N, d)) * 2.0
@@ -204,9 +178,6 @@ def init(
         positions = init_positions
 
     # Compute initial Cholesky factor from particle positions.
-    # Always use positions at init (not scores): particles start far from the
-    # target, so score covariance is unreliable.  The source setting governs
-    # updates during step().
     pc = config.preconditioner
     if pc.is_cholesky:
         cholesky_factor = compute_ensemble_cholesky(
@@ -243,10 +214,10 @@ def init(
 
 def _resolve_sigma(config: SDDConfig, step: int):
     """Resolve sigma, respecting FDR."""
-    if config.fdr:
-        alpha = resolve_param(config, "alpha", step)
+    if config.proposal.fdr:
+        alpha = resolve_param(config, "proposal.alpha", step)
         return jnp.sqrt(2.0 * alpha)
-    return resolve_param(config, "sigma", step)
+    return resolve_param(config, "proposal.sigma", step)
 
 
 def step(
@@ -259,11 +230,11 @@ def step(
 
     Pipeline:
         1. Cross-coupling (identical to ETD):
-           propose → IS weights → cost → Sinkhorn → resample → y_cross
+           propose -> IS weights -> cost -> Sinkhorn -> resample -> y_cross
         2. Self-coupling:
-           N×N cost between particles → balanced Sinkhorn → barycentric mean → x̄_self
+           N x N cost between particles -> balanced Sinkhorn -> barycentric mean -> x_bar_self
         3. SDD displacement:
-           x_new[i] = x[i] + eta * (y_cross[i] - x̄_self[i])
+           x_new[i] = x[i] + eta * (y_cross[i] - x_bar_self[i])
 
     Args:
         key: JAX PRNG key.
@@ -274,29 +245,9 @@ def step(
     Returns:
         Tuple ``(new_state, info)``.
     """
-    # --- Resolve cost name + whiten flag (mahalanobis alias) ---
-    cost_name = config.cost
-    whiten = config.whiten
-    if cost_name == "mahalanobis":
-        warnings.warn(
-            "cost='mahalanobis' is deprecated; use cost='euclidean' with "
-            "whiten=True instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        cost_name = "euclidean"
-        whiten = True
-
     N = config.n_particles
     pc = config.preconditioner
     key_propose, key_resample, key_mutate = jax.random.split(key, 3)
-
-    # --- Legacy preconditioner path ---
-    preconditioner = None
-    legacy_precond = (not pc.active) and (config.precondition or whiten)
-    if legacy_precond:
-        P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)
-        preconditioner = P
 
     # --- Preconditioner dispatch ---
     cholesky_for_proposals = None
@@ -317,10 +268,10 @@ def step(
             diag_for_cost = P_new
 
     # --- Resolve scheduled parameters ---
-    alpha = resolve_param(config, "alpha", state.step)
+    alpha = resolve_param(config, "proposal.alpha", state.step)
     sigma = _resolve_sigma(config, state.step)
     eps = resolve_param(config, "epsilon", state.step)
-    sdd_eta = config.sdd_step_size
+    sdd_eta = config.eta
 
     # ===================================================================
     # 1. Cross-coupling (identical to ETD balanced)
@@ -333,14 +284,9 @@ def step(
         target,
         alpha=alpha,
         sigma=sigma,
-        n_proposals=config.n_proposals,
-        use_score=config.use_score,
-        score_clip_val=config.score_clip,
-        precondition=config.precondition if not pc.active else False,
-        precond_accum=(
-            state.precond_accum if config.precondition and not pc.active else None
-        ),
-        precond_delta=config.precond_delta,
+        n_proposals=config.proposal.count,
+        use_score=config.proposal.use_score,
+        score_clip_val=config.proposal.clip_score,
         cholesky_factor=cholesky_for_proposals,
     )
 
@@ -355,34 +301,29 @@ def step(
             proposals, means, target, sigma=sigma,
             preconditioner=diag_for_proposals,
         )
-    elif legacy_precond and config.precondition:
-        log_b = importance_weights(
-            proposals, means, target, sigma=sigma,
-            preconditioner=preconditioner,
-        )
     else:
         log_b = importance_weights(
             proposals, means, target, sigma=sigma,
         )
 
     # 1c. DV feedback
-    if config.dv_feedback:
-        dv_weight = resolve_param(config, "dv_weight", state.step)
-        dv_expanded = jnp.repeat(state.dv_potential, config.n_proposals)
+    if config.feedback.enabled:
+        dv_weight = resolve_param(config, "feedback.weight", state.step)
+        dv_expanded = jnp.repeat(state.dv_potential, config.proposal.count)
         log_b = log_b - dv_weight * dv_expanded
         log_b = log_b - logsumexp(log_b)
 
     # 1d. Cost matrix (cross)
+    cost_name = config.cost.type
     if cost_name == "langevin":
-        # Inline Langevin-residual cost (approach B) — cross-coupling only.
-        cost_whiten = dict(config.cost_params).get("whiten", False)
+        cost_whiten = config.cost.whiten
         chol = cholesky_for_cost if cost_whiten else None
         C_cross = langevin_residual_cost(
             state.positions, proposals, scores, eps,
             cholesky_factor=chol, whiten=cost_whiten,
         )
     else:
-        cost_fn = build_cost_fn(cost_name, config.cost_params)
+        cost_fn = build_cost_fn(cost_name, config.cost.params)
         if cholesky_for_cost is not None:
             C_cross = cost_fn(
                 state.positions, proposals, cholesky_factor=cholesky_for_cost,
@@ -391,13 +332,9 @@ def step(
             C_cross = cost_fn(
                 state.positions, proposals, preconditioner=diag_for_cost,
             )
-        elif legacy_precond and whiten:
-            C_cross = cost_fn(
-                state.positions, proposals, preconditioner=preconditioner,
-            )
         else:
             C_cross = cost_fn(state.positions, proposals)
-    C_cross, cost_scale_cross = normalize_cost(C_cross, config.cost_normalize)
+    C_cross, cost_scale_cross = normalize_cost(C_cross, config.cost.normalize)
 
     # 1e. Source marginal (uniform)
     log_a = -jnp.log(N) * jnp.ones(N)
@@ -406,8 +343,8 @@ def step(
     log_gamma_cross, dual_f_cross, dual_g_cross, cross_iters = sinkhorn_log_domain(
         C_cross, log_a, log_b,
         eps=eps,
-        max_iter=config.sinkhorn_max_iter,
-        tol=config.sinkhorn_tol,
+        max_iter=config.coupling.iterations,
+        tol=config.coupling.tolerance,
         dual_f_init=state.dual_f_cross,
         dual_g_init=state.dual_g_cross,
     )
@@ -417,28 +354,28 @@ def step(
         key_resample,
         log_gamma_cross,
         proposals,
-        step_size=config.step_size,
+        step_size=config.update.damping,
         positions=state.positions,
     )
 
     # 1h. DV potential
-    if config.dv_feedback:
+    if config.feedback.enabled:
         g_tilde_cross = dual_g_cross - eps * log_b
         selected_g = g_tilde_cross[cross_aux["indices"]]
-        cross_step_size = resolve_param(config, "step_size", state.step)
+        cross_damping = resolve_param(config, "update.damping", state.step)
         dv_potential = (
-            (1.0 - cross_step_size) * dual_f_cross + cross_step_size * selected_g
+            (1.0 - cross_damping) * dual_f_cross + cross_damping * selected_g
         )
     else:
         dv_potential = jnp.zeros(N)
 
     # ===================================================================
-    # 2. Self-coupling (N×N between particles)
+    # 2. Self-coupling (N x N between particles)
     # ===================================================================
 
     # 2a. Self-cost matrix (Euclidean for self — Langevin has no self reference)
     self_cost_name = "euclidean" if cost_name == "langevin" else cost_name
-    self_cost_params = () if cost_name == "langevin" else config.cost_params
+    self_cost_params = () if cost_name == "langevin" else config.cost.params
     self_cost_fn = build_cost_fn(self_cost_name, self_cost_params)
     if cholesky_for_cost is not None:
         C_self = self_cost_fn(
@@ -448,13 +385,9 @@ def step(
         C_self = self_cost_fn(
             state.positions, state.positions, preconditioner=diag_for_cost,
         )
-    elif legacy_precond and whiten:
-        C_self = self_cost_fn(
-            state.positions, state.positions, preconditioner=preconditioner,
-        )
     else:
         C_self = self_cost_fn(state.positions, state.positions)
-    C_self, cost_scale_self = normalize_cost(C_self, config.cost_normalize)
+    C_self, cost_scale_self = normalize_cost(C_self, config.cost.normalize)
 
     # 2b. Uniform marginals for self-coupling
     log_a_self = -jnp.log(N) * jnp.ones(N)
@@ -463,9 +396,9 @@ def step(
     # 2c. Balanced Sinkhorn (self)
     log_gamma_self, dual_f_self, dual_g_self, self_iters = sinkhorn_log_domain(
         C_self, log_a_self, log_b_self,
-        eps=config.self_epsilon,
-        max_iter=config.self_sinkhorn_max_iter,
-        tol=config.self_sinkhorn_tol,
+        eps=config.self_coupling.epsilon,
+        max_iter=config.self_coupling.iterations,
+        tol=config.self_coupling.tolerance,
         dual_f_init=state.dual_f_self,
         dual_g_init=state.dual_g_self,
     )
@@ -485,19 +418,22 @@ def step(
     # --- MCMC Mutation (post-transport local refinement) ---
     mut = config.mutation
     if mut.active:
-        if mut.use_cholesky and not pc.is_cholesky:
+        if mut.cholesky and not pc.is_cholesky:
             _auto_pc = PreconditionerConfig(
                 type="cholesky", shrinkage=0.1, jitter=1e-6,
             )
             mut_cholesky = compute_ensemble_cholesky(
                 new_positions, state.cholesky_factor, _auto_pc,
             )
-        elif mut.use_cholesky:
+        elif mut.cholesky:
             mut_cholesky = state.cholesky_factor
         else:
             mut_cholesky = None
 
-        mut_clip = mut.score_clip if mut.score_clip is not None else config.score_clip
+        mut_clip = (
+            mut.clip_score if mut.clip_score is not None
+            else config.proposal.clip_score
+        )
 
         new_positions, new_log_prob, new_scores, mut_info = mutate(
             key_mutate, new_positions, target, mut,
@@ -509,13 +445,12 @@ def step(
         mut_info = {}
 
     # --- Preconditioner update ---
-    # Use post-mutation positions so Cholesky reflects latest particle spread
     new_precond = state.precond_accum
     new_cholesky = state.cholesky_factor
 
     if pc.is_cholesky:
         if pc.source == "scores":
-            if pc.use_unclipped_scores and config.use_score:
+            if pc.use_raw_scores and config.proposal.use_score:
                 precond_data = target.score(new_positions)
             else:
                 precond_data = scores
@@ -527,10 +462,6 @@ def step(
     elif pc.is_rmsprop:
         new_precond = update_rmsprop_accum(
             state.precond_accum, scores, beta=pc.beta,
-        )
-    elif legacy_precond:
-        new_precond = update_preconditioner(
-            state.precond_accum, scores, beta=config.precond_beta,
         )
 
     # --- Assemble new state ---

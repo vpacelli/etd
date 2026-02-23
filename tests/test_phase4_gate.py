@@ -22,8 +22,9 @@ from etd.step import init as etd_init, step as etd_step
 from etd.targets import TARGETS
 from etd.targets.funnel import FunnelTarget
 from etd.targets.gaussian import GaussianTarget
-from etd.types import ETDConfig
 from etd.update import UPDATES
+
+from conftest import make_test_config, make_test_sdd_config
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +58,8 @@ def _run_svgd(key, target, n_particles, n_iters, lr=0.1, init_positions=None):
     config = bl["config"](
         n_particles=n_particles,
         n_iterations=n_iters,
-        learning_rate=lr,
-        score_clip=5.0,
+        stepsize=lr,
+        clip_score=5.0,
     )
 
     k_init, k_run = jax.random.split(key)
@@ -91,7 +92,7 @@ class TestFunnelGate:
     @pytest.mark.slow
     def test_etd_spans_funnel_neck(self, funnel, shared_init):
         """ETD particles in v < -2 region should be present."""
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=200,
             n_proposals=25,
             n_iterations=500,
@@ -113,7 +114,7 @@ class TestFunnelGate:
     @pytest.mark.slow
     def test_etd_spans_funnel_mouth(self, funnel, shared_init):
         """ETD particles in v > 2 region should be present."""
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=200,
             n_proposals=25,
             n_iterations=500,
@@ -134,7 +135,7 @@ class TestFunnelGate:
     @pytest.mark.slow
     def test_etd_more_neck_coverage_than_svgd(self, funnel, shared_init):
         """ETD should have more particles in the neck than SVGD."""
-        etd_config = ETDConfig(
+        etd_config = make_test_config(
             n_particles=200,
             n_proposals=25,
             n_iterations=500,
@@ -185,7 +186,7 @@ class TestBLRGate:
         ref = jnp.asarray(ref)
         init_pos = jax.random.normal(jax.random.PRNGKey(42), (200, target.dim)) * 0.1
 
-        etd_config = ETDConfig(
+        etd_config = make_test_config(
             n_particles=200,
             n_proposals=25,
             n_iterations=1000,
@@ -225,7 +226,7 @@ class TestBLRGate:
         ref = jnp.asarray(ref)
         init_pos = jax.random.normal(jax.random.PRNGKey(42), (200, target.dim)) * 0.1
 
-        etd_config = ETDConfig(
+        etd_config = make_test_config(
             n_particles=200,
             n_proposals=25,
             n_iterations=1000,
@@ -277,7 +278,7 @@ class TestIntegration:
         from etd.targets.banana import BananaTarget
 
         target = BananaTarget(dim=2)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20,
             n_proposals=10,
             n_iterations=10,
@@ -293,7 +294,7 @@ class TestIntegration:
     def test_funnel_smoke(self):
         """10 iterations of ETD on funnel target, no errors."""
         target = FunnelTarget(dim=5)
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=20,
             n_proposals=10,
             n_iterations=10,
@@ -309,11 +310,10 @@ class TestIntegration:
 
     def test_sdd_smoke(self):
         """10 iterations of SDD on Gaussian, no errors."""
-        from etd.extensions.sdd import SDDConfig
         from etd.extensions.sdd import init as sdd_init, step as sdd_step
 
         target = GaussianTarget(dim=2)
-        config = SDDConfig(
+        config = make_test_sdd_config(
             n_particles=20,
             n_proposals=10,
             epsilon=0.1,

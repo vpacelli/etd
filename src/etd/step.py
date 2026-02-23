@@ -9,7 +9,6 @@ Both :func:`init` and :func:`step` are designed for use with
 ``jax.lax.scan`` or a simple Python loop.
 """
 
-import warnings
 from typing import Dict, Optional, Tuple
 
 import jax
@@ -23,7 +22,6 @@ from etd.primitives.mutation import mutate
 from etd.proposals.langevin import (
     clip_scores,
     langevin_proposals,
-    update_preconditioner,
 )
 from etd.proposals.preconditioner import (
     compute_ensemble_cholesky,
@@ -38,8 +36,8 @@ from etd.weights import importance_weights
 def _resolve_sigma(config: ETDConfig, step: int):
     """Resolve sigma, respecting FDR coupling with alpha.
 
-    When ``fdr=True``, σ = √(2α) — if α is scheduled, σ tracks it.
-    When ``fdr=False``, σ is resolved independently (may be scheduled).
+    When ``fdr=True``, sigma = sqrt(2*alpha) — if alpha is scheduled, sigma tracks it.
+    When ``fdr=False``, sigma is resolved independently (may be scheduled).
 
     Args:
         config: ETD configuration (static for JIT).
@@ -48,10 +46,10 @@ def _resolve_sigma(config: ETDConfig, step: int):
     Returns:
         Scalar sigma value.
     """
-    if config.fdr:
-        alpha = resolve_param(config, "alpha", step)
+    if config.proposal.fdr:
+        alpha = resolve_param(config, "proposal.alpha", step)
         return jnp.sqrt(2.0 * alpha)
-    return resolve_param(config, "sigma", step)
+    return resolve_param(config, "proposal.sigma", step)
 
 
 def init(
@@ -74,7 +72,7 @@ def init(
     """
     N = config.n_particles
     d = target.dim
-    M = config.n_proposals
+    M = config.proposal.count
 
     if init_positions is None:
         positions = jax.random.normal(key, (N, d)) * 2.0
@@ -136,36 +134,15 @@ def step(
         - ``info``: Dict with diagnostic keys:
           ``"sinkhorn_iters"``, ``"cost_scale"``, ``"coupling_ess"``.
     """
-    # --- Resolve cost name + whiten flag (mahalanobis alias) ---
-    cost_name = config.cost
-    whiten = config.whiten
-    if cost_name == "mahalanobis":
-        warnings.warn(
-            "cost='mahalanobis' is deprecated; use cost='euclidean' with "
-            "whiten=True instead.",
-            FutureWarning,
-            stacklevel=2,
-        )
-        cost_name = "euclidean"
-        whiten = True
-
     N = config.n_particles
     pc = config.preconditioner   # shorthand
     key_propose, key_update, key_mutate = jax.random.split(key, 3)
 
-    # --- Legacy preconditioner path (flat fields) ---
-    # Kept for backward compatibility; new code should use config.preconditioner.
-    preconditioner = None
-    legacy_precond = (not pc.active) and (config.precondition or whiten)
-    if legacy_precond:
-        P = 1.0 / jnp.sqrt(state.precond_accum + config.precond_delta)
-        preconditioner = P
-
     # --- Resolve scheduled parameters ---
-    alpha = resolve_param(config, "alpha", state.step)
+    alpha = resolve_param(config, "proposal.alpha", state.step)
     sigma = _resolve_sigma(config, state.step)
     eps = resolve_param(config, "epsilon", state.step)
-    step_size = resolve_param(config, "step_size", state.step)
+    damping = resolve_param(config, "update.damping", state.step)
 
     # --- Preconditioner dispatch (trace-time branching) ---
     cholesky_for_proposals = None
@@ -192,16 +169,9 @@ def step(
         target,
         alpha=alpha,
         sigma=sigma,
-        n_proposals=config.n_proposals,
-        use_score=config.use_score,
-        score_clip_val=config.score_clip,
-        # Legacy diagonal path
-        precondition=config.precondition if not pc.active else False,
-        precond_accum=(
-            state.precond_accum if config.precondition and not pc.active else None
-        ),
-        precond_delta=config.precond_delta,
-        # New paths
+        n_proposals=config.proposal.count,
+        use_score=config.proposal.use_score,
+        score_clip_val=config.proposal.clip_score,
         cholesky_factor=cholesky_for_proposals,
     )
 
@@ -216,36 +186,32 @@ def step(
             proposals, means, target, sigma=sigma,
             preconditioner=diag_for_proposals,
         )
-    elif legacy_precond and config.precondition:
-        log_b = importance_weights(
-            proposals, means, target, sigma=sigma,
-            preconditioner=preconditioner,
-        )
     else:
         log_b = importance_weights(
             proposals, means, target, sigma=sigma,
         )
 
     # --- 2b. DV feedback: augment target weights with clean per-particle signal ---
-    # Uses dv_potential from *previous* iteration (zeros on first step → no-op).
+    # Uses dv_potential from *previous* iteration (zeros on first step -> no-op).
     # dv_potential is (N,); expand to (N*M,) matching proposal ordering.
-    if config.dv_feedback:
-        dv_weight = resolve_param(config, "dv_weight", state.step)
-        dv_expanded = jnp.repeat(state.dv_potential, config.n_proposals)  # (N*M,)
+    if config.feedback.enabled:
+        dv_weight = resolve_param(config, "feedback.weight", state.step)
+        dv_expanded = jnp.repeat(state.dv_potential, config.proposal.count)  # (N*M,)
         log_b = log_b - dv_weight * dv_expanded
         log_b = log_b - logsumexp(log_b)
 
     # --- 3. Cost matrix ---
+    cost_name = config.cost.type
     if cost_name == "langevin":
         # Inline Langevin-residual cost (approach B).
-        cost_whiten = dict(config.cost_params).get("whiten", False)
+        cost_whiten = config.cost.whiten
         chol = cholesky_for_cost if cost_whiten else None
         C = langevin_residual_cost(
             state.positions, proposals, scores, eps,
             cholesky_factor=chol, whiten=cost_whiten,
         )
     else:
-        cost_fn = build_cost_fn(cost_name, config.cost_params)
+        cost_fn = build_cost_fn(cost_name, config.cost.params)
         if cholesky_for_cost is not None:
             C = cost_fn(
                 state.positions, proposals,
@@ -256,77 +222,72 @@ def step(
                 state.positions, proposals,
                 preconditioner=diag_for_cost,
             )
-        elif legacy_precond and whiten:
-            C = cost_fn(
-                state.positions, proposals,
-                preconditioner=preconditioner,
-            )
         else:
             C = cost_fn(state.positions, proposals)
     # C shape: (N, N*M)
 
     # --- 4. Normalize cost ---
-    C, cost_scale = normalize_cost(C, config.cost_normalize)
+    C, cost_scale = normalize_cost(C, config.cost.normalize)
 
     # --- 5. Source marginal (uniform) ---
     log_a = -jnp.log(N) * jnp.ones(N)
 
     # --- 6. Coupling ---
-    # Python if — resolved at trace time (config is static).
-    if config.coupling == "balanced":
+    # Python if -- resolved at trace time (config is static).
+    if config.coupling.type == "balanced":
         log_gamma, dual_f, dual_g, sinkhorn_iters = sinkhorn_log_domain(
             C, log_a, log_b,
             eps=eps,
-            max_iter=config.sinkhorn_max_iter,
-            tol=config.sinkhorn_tol,
+            max_iter=config.coupling.iterations,
+            tol=config.coupling.tolerance,
             dual_f_init=state.dual_f,
             dual_g_init=state.dual_g,
         )
-    elif config.coupling == "unbalanced":
+    elif config.coupling.type == "unbalanced":
         log_gamma, dual_f, dual_g, sinkhorn_iters = sinkhorn_unbalanced(
             C, log_a, log_b,
             eps=eps,
-            rho=config.rho,
-            max_iter=config.sinkhorn_max_iter,
-            tol=config.sinkhorn_tol,
+            rho=config.coupling.rho,
+            max_iter=config.coupling.iterations,
+            tol=config.coupling.tolerance,
             dual_f_init=state.dual_f,
             dual_g_init=state.dual_g,
         )
-    elif config.coupling == "gibbs":
+    elif config.coupling.type == "gibbs":
         log_gamma, dual_f, dual_g = gibbs_coupling(
             C, log_a, log_b,
             eps=eps,
         )
         sinkhorn_iters = jnp.int32(0)
     else:
-        raise ValueError(f"Unknown coupling '{config.coupling}'")
+        raise ValueError(f"Unknown coupling '{config.coupling.type}'")
 
-    # --- 7. Update (dispatch by config.update) ---
-    update_fn = get_update_fn(config.update)
+    # --- 7. Update (dispatch by config.update.type) ---
+    update_fn = get_update_fn(config.update.type)
     new_positions, update_aux = update_fn(
         key_update,
         log_gamma,
         proposals,
-        step_size=step_size,
+        step_size=damping,
         positions=state.positions,
     )
 
     # --- 7b. Compute per-particle DV potential (c-transform + interpolation) ---
-    if config.dv_feedback:
-        if config.coupling == "balanced":
+    if config.feedback.enabled:
+        if config.coupling.type == "balanced":
             g_tilde = dual_g - eps * log_b
-        elif config.coupling == "unbalanced":
-            lam = config.rho / (1.0 + config.rho)
+        elif config.coupling.type == "unbalanced":
+            lam = config.coupling.rho / (1.0 + config.coupling.rho)
             g_tilde = dual_g - eps * lam * log_b
         else:  # gibbs
             g_tilde = jnp.zeros_like(dual_g)
 
-        if config.update == "categorical":
+        if config.update.type == "categorical":
             selected_g = g_tilde[update_aux["indices"]]          # (N,)
         else:  # barycentric
             selected_g = update_aux["weights"] @ g_tilde         # (N,)
 
-        dv_potential = (1.0 - step_size) * dual_f + step_size * selected_g
+        dv_potential = (1.0 - damping) * dual_f + damping * selected_g
     else:
         dv_potential = jnp.zeros(N)
 
@@ -334,19 +295,22 @@ def step(
     mut = config.mutation
     if mut.active:
         # Resolve Cholesky for mutation
-        if mut.use_cholesky and not pc.is_cholesky:
+        if mut.cholesky and not pc.is_cholesky:
             _auto_pc = PreconditionerConfig(
                 type="cholesky", shrinkage=0.1, jitter=1e-6,
             )
             mut_cholesky = compute_ensemble_cholesky(
                 new_positions, state.cholesky_factor, _auto_pc,
             )
-        elif mut.use_cholesky:
+        elif mut.cholesky:
             mut_cholesky = state.cholesky_factor
         else:
             mut_cholesky = None
 
-        mut_clip = mut.score_clip if mut.score_clip is not None else config.score_clip
+        mut_clip = (
+            mut.clip_score if mut.clip_score is not None
+            else config.proposal.clip_score
+        )
 
         new_positions, new_log_prob, new_scores, mut_info = mutate(
             key_mutate, new_positions, target, mut,
@@ -365,7 +329,7 @@ def step(
     if pc.is_cholesky:
         # Select data source for covariance: scores or positions
         if pc.source == "scores":
-            if pc.use_unclipped_scores and config.use_score:
+            if pc.use_raw_scores and config.proposal.use_score:
                 # Compute raw (unclipped) scores for preconditioner
                 precond_data = target.score(new_positions)  # (N, d)
             else:
@@ -379,10 +343,6 @@ def step(
     elif pc.is_rmsprop:
         new_precond = update_rmsprop_accum(
             state.precond_accum, scores, beta=pc.beta,
-        )
-    elif legacy_precond:
-        new_precond = update_preconditioner(
-            state.precond_accum, scores, beta=config.precond_beta,
         )
 
     # --- Assemble new state ---

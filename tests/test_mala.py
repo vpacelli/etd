@@ -12,6 +12,7 @@ import pytest
 from etd.baselines.mala import MALAConfig, MALAState, init, step
 from etd.diagnostics.metrics import mean_error
 from etd.targets.gaussian import GaussianTarget
+from etd.types import PreconditionerConfig
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +151,7 @@ class TestAcceptReject:
 
     def test_tiny_step_high_acceptance(self, gaussian_target, key):
         """Very small h → proposals are close → nearly 100% acceptance."""
-        cfg = MALAConfig(n_particles=100, step_size=1e-5)
+        cfg = MALAConfig(n_particles=100, stepsize=1e-5)
         k1, k_run = jax.random.split(key)
         state = init(k1, gaussian_target, cfg)
 
@@ -167,7 +168,7 @@ class TestAcceptReject:
 
     def test_huge_step_low_acceptance(self, gaussian_target, key):
         """Very large h → proposals jump far → low acceptance."""
-        cfg = MALAConfig(n_particles=100, step_size=100.0)
+        cfg = MALAConfig(n_particles=100, stepsize=100.0)
         k1, k2 = jax.random.split(key)
         state = init(k1, gaussian_target, cfg)
         _, info = step(k2, state, gaussian_target, cfg)
@@ -176,7 +177,7 @@ class TestAcceptReject:
 
     def test_rejection_preserves_cache(self, gaussian_target, key):
         """Rejected particles should keep their original log_prob/scores."""
-        cfg = MALAConfig(n_particles=200, step_size=100.0)
+        cfg = MALAConfig(n_particles=200, stepsize=100.0)
         k1, k2 = jax.random.split(key)
         state = init(k1, gaussian_target, cfg)
         new_state, _ = step(k2, state, gaussian_target, cfg)
@@ -204,8 +205,11 @@ class TestPreconditioner:
     """Preconditioning with RMSProp accumulator."""
 
     def test_accum_updates(self, gaussian_target, key):
-        """With precondition=True, accumulator should change after a step."""
-        cfg = MALAConfig(n_particles=50, precondition=True)
+        """With rmsprop preconditioner, accumulator should change after a step."""
+        cfg = MALAConfig(
+            n_particles=50,
+            preconditioner=PreconditionerConfig(type="rmsprop", proposals=True),
+        )
         k1, k2 = jax.random.split(key)
         state = init(k1, gaussian_target, cfg)
         new_state, _ = step(k2, state, gaussian_target, cfg)
@@ -214,8 +218,8 @@ class TestPreconditioner:
         assert not jnp.allclose(new_state.precond_accum, state.precond_accum)
 
     def test_accum_unchanged_without_precond(self, gaussian_target, key):
-        """With precondition=False, accumulator should remain ones."""
-        cfg = MALAConfig(n_particles=50, precondition=False)
+        """Without preconditioner, accumulator should remain ones."""
+        cfg = MALAConfig(n_particles=50)
         k1, k2 = jax.random.split(key)
         state = init(k1, gaussian_target, cfg)
         new_state, _ = step(k2, state, gaussian_target, cfg)
@@ -232,7 +236,7 @@ class TestPreconditioner:
         n_steps = 300
 
         # Without preconditioning
-        cfg_no = MALAConfig(n_particles=100, step_size=0.0001, precondition=False)
+        cfg_no = MALAConfig(n_particles=100, stepsize=0.0001)
         k1, k_run = jax.random.split(key)
         state_no = init(k1, target, cfg_no)
         for _ in range(n_steps):
@@ -241,7 +245,10 @@ class TestPreconditioner:
         err_no = float(mean_error(state_no.positions, target.mean))
 
         # With preconditioning
-        cfg_yes = MALAConfig(n_particles=100, step_size=0.0001, precondition=True)
+        cfg_yes = MALAConfig(
+            n_particles=100, stepsize=0.0001,
+            preconditioner=PreconditionerConfig(type="rmsprop", proposals=True),
+        )
         k1, k_run = jax.random.split(key)
         state_yes = init(k1, target, cfg_yes)
         for _ in range(n_steps):
@@ -263,7 +270,7 @@ class TestConvergence:
     """MALA on isotropic Gaussian(d=2) should converge in 500 steps."""
 
     def test_mean_error(self, gaussian_target):
-        cfg = MALAConfig(n_particles=100, step_size=0.01, n_iterations=500)
+        cfg = MALAConfig(n_particles=100, stepsize=0.01, n_iterations=500)
         key = jax.random.PRNGKey(0)
         k_init, k_run = jax.random.split(key)
         state = init(k_init, gaussian_target, cfg)
@@ -295,7 +302,7 @@ class TestMALAvsULA:
         key = jax.random.PRNGKey(7)
 
         # --- ULA ---
-        ula_cfg = ULAConfig(n_particles=N, step_size=h)
+        ula_cfg = ULAConfig(n_particles=N, stepsize=h)
         k1, k_run = jax.random.split(key)
         ula_state = ula_init(k1, target, ula_cfg)
         for _ in range(n_steps):
@@ -304,7 +311,7 @@ class TestMALAvsULA:
         ula_var = jnp.var(ula_state.positions, axis=0)  # (d,)
 
         # --- MALA ---
-        mala_cfg = MALAConfig(n_particles=N, step_size=h)
+        mala_cfg = MALAConfig(n_particles=N, stepsize=h)
         k1, k_run = jax.random.split(key)
         mala_state = init(k1, target, mala_cfg)
         for _ in range(n_steps):
@@ -332,10 +339,13 @@ class TestCholesky:
     """Tests for the Cholesky-preconditioned MALA path."""
 
     def test_cholesky_init(self):
-        """use_cholesky=True → cholesky_factor is not identity."""
+        """Cholesky preconditioner → cholesky_factor is not identity."""
         target = GaussianTarget(dim=4, condition_number=10.0)
         key = jax.random.PRNGKey(50)
-        cfg = MALAConfig(n_particles=50, use_cholesky=True)
+        cfg = MALAConfig(
+            n_particles=50,
+            preconditioner=PreconditionerConfig(type="cholesky"),
+        )
         state = init(key, target, cfg)
 
         assert state.cholesky_factor.shape == (4, 4)
@@ -346,7 +356,10 @@ class TestCholesky:
         """After 1 step, all state fields have correct shapes."""
         target = GaussianTarget(dim=4)
         key = jax.random.PRNGKey(51)
-        cfg = MALAConfig(n_particles=30, use_cholesky=True)
+        cfg = MALAConfig(
+            n_particles=30,
+            preconditioner=PreconditionerConfig(type="cholesky"),
+        )
         k1, k2 = jax.random.split(key)
         state = init(k1, target, cfg)
         new_state, info = step(k2, state, target, cfg)
@@ -364,7 +377,8 @@ class TestCholesky:
         key = jax.random.PRNGKey(52)
         cfg = MALAConfig(
             n_particles=100, n_iterations=500,
-            step_size=0.05, use_cholesky=True,
+            stepsize=0.05,
+            preconditioner=PreconditionerConfig(type="cholesky"),
         )
         k_init, k_run = jax.random.split(key)
         state = init(k_init, target, cfg)
@@ -385,7 +399,8 @@ class TestCholesky:
 
         # Diagonal MALA
         cfg_diag = MALAConfig(
-            n_particles=N, step_size=0.001, precondition=True,
+            n_particles=N, stepsize=0.001,
+            preconditioner=PreconditionerConfig(type="rmsprop", proposals=True),
         )
         k_init, k_run = jax.random.split(key)
         state_diag = init(k_init, target, cfg_diag)
@@ -396,7 +411,8 @@ class TestCholesky:
 
         # Cholesky MALA
         cfg_chol = MALAConfig(
-            n_particles=N, step_size=0.001, use_cholesky=True,
+            n_particles=N, stepsize=0.001,
+            preconditioner=PreconditionerConfig(type="cholesky"),
         )
         k_init, k_run = jax.random.split(key)
         state_chol = init(k_init, target, cfg_chol)

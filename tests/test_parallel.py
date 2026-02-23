@@ -15,15 +15,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from conftest import make_test_config
 from etd.targets.gmm import GMMTarget
-from etd.types import ETDConfig, PreconditionerConfig
+from etd.types import ProposalConfig
 from experiments._parallel import (
-    _STRUCTURAL_FIELDS_ETD,
     _compute_progress_segments,
+    _get_scalar_paths,
     _make_batched_scan,
     batch_init_states,
     group_configs_by_structure,
     identify_varying_scalars,
+    replace_nested,
     run_seeds_batched,
     structural_key,
     validate_sweep_fields,
@@ -52,7 +54,7 @@ def shared():
 
 @pytest.fixture
 def etd_config():
-    return ETDConfig(
+    return make_test_config(
         n_particles=50, n_iterations=30, n_proposals=10,
         coupling="balanced", cost="euclidean", update="categorical",
         use_score=True, epsilon=0.1, alpha=0.05,
@@ -215,7 +217,7 @@ class TestBatchedMatchesSequential:
         from etd.baselines.svgd import SVGDConfig
         from etd.baselines.svgd import init as svgd_init, step as svgd_step
 
-        config = SVGDConfig(n_particles=50, n_iterations=30, learning_rate=0.1)
+        config = SVGDConfig(n_particles=50, n_iterations=30, stepsize=0.1)
         seeds = [0, 1]
         checkpoints = [15, 30]
         metrics_list = ["energy_distance"]
@@ -262,7 +264,7 @@ class TestBatchedMatchesSequential:
         from etd.baselines.mala import MALAConfig
         from etd.baselines.mala import init as mala_init, step as mala_step
 
-        config = MALAConfig(n_particles=50, n_iterations=30, step_size=0.01)
+        config = MALAConfig(n_particles=50, n_iterations=30, stepsize=0.01)
         seeds = [0, 1]
         checkpoints = [30]
         metrics_list = ["energy_distance"]
@@ -339,23 +341,23 @@ class TestBufferDonation:
 class TestStructuralGrouping:
     def test_same_structure_grouped(self):
         """Configs differing only in epsilon should be in the same group."""
-        c1 = ETDConfig(epsilon=0.1, coupling="balanced")
-        c2 = ETDConfig(epsilon=0.5, coupling="balanced")
+        c1 = make_test_config(epsilon=0.1, coupling="balanced")
+        c2 = make_test_config(epsilon=0.5, coupling="balanced")
         assert structural_key(c1) == structural_key(c2)
 
     def test_different_coupling_separated(self):
         """Configs with different coupling should be in different groups."""
-        c1 = ETDConfig(coupling="balanced")
-        c2 = ETDConfig(coupling="gibbs")
+        c1 = make_test_config(coupling="balanced")
+        c2 = make_test_config(coupling="gibbs")
         assert structural_key(c1) != structural_key(c2)
 
     def test_grouping_function(self):
         """group_configs_by_structure partitions correctly."""
         from etd.step import init as etd_init, step as etd_step
 
-        c1 = ETDConfig(epsilon=0.1, coupling="balanced")
-        c2 = ETDConfig(epsilon=0.5, coupling="balanced")
-        c3 = ETDConfig(epsilon=0.1, coupling="gibbs")
+        c1 = make_test_config(epsilon=0.1, coupling="balanced")
+        c2 = make_test_config(epsilon=0.5, coupling="balanced")
+        c3 = make_test_config(epsilon=0.1, coupling="gibbs")
 
         items = [
             ("A", c1, etd_init, etd_step, False),
@@ -369,15 +371,39 @@ class TestStructuralGrouping:
         assert sizes == [1, 2]
 
     def test_identify_varying_scalars(self):
-        """Correctly identifies which scalar fields differ."""
-        c1 = ETDConfig(epsilon=0.1, score_clip=3.0, alpha=0.05)
-        c2 = ETDConfig(epsilon=0.5, score_clip=5.0, alpha=0.05)
+        """Correctly identifies which scalar fields differ (dotted paths)."""
+        c1 = make_test_config(epsilon=0.1, alpha=0.05)
+        c2 = make_test_config(epsilon=0.5, alpha=0.05)
         varying = identify_varying_scalars([c1, c2])
         assert "epsilon" in varying
-        assert "score_clip" in varying
-        assert "alpha" not in varying
-        # step_size is scalar (damping uses branchless arithmetic)
-        assert "step_size" not in _STRUCTURAL_FIELDS_ETD
+        assert "proposal.alpha" not in varying  # same across configs
+
+    def test_identify_varying_nested_scalars(self):
+        """Detects varying nested sub-config float fields."""
+        c1 = make_test_config(epsilon=0.1, alpha=0.01)
+        c2 = make_test_config(epsilon=0.1, alpha=0.10)
+        varying = identify_varying_scalars([c1, c2])
+        assert "proposal.alpha" in varying
+        assert "epsilon" not in varying
+
+    def test_scalar_paths_auto_detection(self):
+        """_get_scalar_paths finds both top-level and nested float fields."""
+        c = make_test_config()
+        paths = _get_scalar_paths(c)
+        # Top-level float
+        assert "epsilon" in paths
+        # Nested floats
+        assert "proposal.alpha" in paths
+        assert "proposal.sigma" in paths
+        assert "proposal.clip_score" in paths
+        assert "coupling.tolerance" in paths
+        assert "coupling.rho" in paths
+        assert "update.damping" in paths
+        assert "feedback.weight" in paths
+        # Non-floats should NOT be in scalar paths
+        assert "coupling.type" not in paths
+        assert "n_particles" not in paths
+        assert "proposal.type" not in paths
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +414,7 @@ class TestSweepValidation:
     def test_schedule_conflict_raises(self):
         """Sweeping a scheduled field should raise ValueError."""
         from etd.schedule import Schedule
-        config = ETDConfig(
+        config = make_test_config(
             epsilon=0.1,
             schedules=(("epsilon", Schedule(kind="linear_decay", value=0.1, end=0.01)),),
         )
@@ -397,8 +423,8 @@ class TestSweepValidation:
 
     def test_no_conflict_passes(self):
         """Non-conflicting sweep fields should not raise."""
-        config = ETDConfig(epsilon=0.1)
-        validate_sweep_fields(config, ["epsilon", "step_size"])  # should not raise
+        config = make_test_config(epsilon=0.1)
+        validate_sweep_fields(config, ["epsilon"])  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -406,21 +432,21 @@ class TestSweepValidation:
 # ---------------------------------------------------------------------------
 
 class TestDoubleSweep:
-    """Sweep vmap (configs × seeds) matches sequential execution."""
+    """Sweep vmap (configs x seeds) matches sequential execution."""
 
     def test_sweep_epsilon_produces_valid_metrics(self, gmm_target, shared, ref_data):
         """Double-vmapped epsilon sweep produces valid, ordered metrics.
 
         NOTE: We compare statistical quality rather than exact positions
         because XLA constant-folding differs between static (closure-captured)
-        and traced (vmap-injected) config scalars. Over many Sinkhorn × ETD
+        and traced (vmap-injected) config scalars. Over many Sinkhorn x ETD
         iterations, float32 rounding differences cause trajectory divergence.
         This is expected for chaotic particle systems.
         """
         from experiments._parallel import run_sweep_batched
         from etd.step import init as etd_init, step as etd_step
 
-        base_config = ETDConfig(
+        base_config = make_test_config(
             n_particles=50, n_iterations=30, n_proposals=10,
             coupling="balanced", cost="euclidean", update="categorical",
             use_score=True, epsilon=0.1, alpha=0.05,
@@ -475,19 +501,26 @@ class TestDoubleSweep:
             assert avg < 5.0, f"Average energy distance {avg:.4f} too high for eps={eps}"
 
     def test_sweep_multiple_fields(self, gmm_target, shared, ref_data):
-        """Sweeping epsilon + alpha simultaneously works."""
+        """Sweeping epsilon and proposal.alpha simultaneously works."""
         from experiments._parallel import run_sweep_batched
         from etd.step import init as etd_init, step as etd_step
 
         # Match shared config: n_particles=50
-        base_config = ETDConfig(
+        base_config = make_test_config(
             n_particles=50, n_iterations=15, n_proposals=10,
             coupling="balanced", cost="euclidean", update="categorical",
             use_score=True, epsilon=0.1, alpha=0.05, fdr=False, sigma=0.1,
         )
+        # Sweep both epsilon (top-level) and proposal.alpha (nested)
         configs = [
-            dataclasses.replace(base_config, epsilon=0.05, alpha=0.01),
-            dataclasses.replace(base_config, epsilon=0.5, alpha=0.1),
+            replace_nested(
+                replace_nested(base_config, "epsilon", 0.05),
+                "proposal.alpha", 0.01,
+            ),
+            replace_nested(
+                replace_nested(base_config, "epsilon", 0.5),
+                "proposal.alpha", 0.10,
+            ),
         ]
         seeds = [0]
         checkpoints = [15]
@@ -507,7 +540,7 @@ class TestDoubleSweep:
         m_by_cs, wc = run_sweep_batched(
             batch_keys, gmm_target, base_config,
             configs, etd_init, etd_step, init_pos_all,
-            ["epsilon", "alpha"],
+            ["epsilon", "proposal.alpha"],
             15, checkpoints, ["energy_distance"], ref_data,
             compute_metrics_fn=compute_metrics,
         )
@@ -520,7 +553,7 @@ class TestDoubleSweep:
         # Different configs should generally produce different results
         v0 = m_by_cs[0][0][15]["energy_distance"]
         v1 = m_by_cs[1][0][15]["energy_distance"]
-        # They shouldn't be exactly equal (different epsilon/alpha)
+        # They shouldn't be exactly equal (different epsilon + alpha)
         assert v0 != v1, "Configs with different params produced identical results"
 
     def test_structural_grouping_in_sweep(self):
@@ -528,9 +561,9 @@ class TestDoubleSweep:
         from experiments._parallel import group_configs_by_structure
         from etd.step import init as etd_init, step as etd_step
 
-        c1 = ETDConfig(epsilon=0.1, coupling="balanced")
-        c2 = ETDConfig(epsilon=0.5, coupling="balanced")
-        c3 = ETDConfig(epsilon=0.1, coupling="gibbs")
+        c1 = make_test_config(epsilon=0.1, coupling="balanced")
+        c2 = make_test_config(epsilon=0.5, coupling="balanced")
+        c3 = make_test_config(epsilon=0.1, coupling="gibbs")
 
         items = [
             ("A", c1, etd_init, etd_step, False),
@@ -551,7 +584,7 @@ class TestDoubleSweep:
         from experiments._parallel import validate_sweep_fields
         from etd.schedule import Schedule
 
-        config = ETDConfig(
+        config = make_test_config(
             epsilon=0.1,
             schedules=(("epsilon", Schedule(kind="linear_decay", value=0.1, end=0.01)),),
         )
@@ -592,7 +625,7 @@ class TestRunIntegration:
                         "label": "MALA",
                         "type": "baseline",
                         "method": "mala",
-                        "step_size": 0.01,
+                        "stepsize": 0.01,
                     },
                 ],
             }

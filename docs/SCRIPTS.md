@@ -28,13 +28,13 @@ algorithm × seed combinations, and saves results.
 
 ```bash
 # Standard run (parallel seeds via vmap, default)
-python -m experiments.run configs/gmm_2d_4.yaml
+python -m experiments.run experiments/configs/gmm/2d_4.yaml
 
 # Debug mode (no JIT, sequential)
-python -m experiments.run configs/gmm_2d_4.yaml --debug
+python -m experiments.run experiments/configs/gmm/2d_4.yaml --debug
 
 # Force sequential seed execution
-python -m experiments.run configs/gmm_2d_4.yaml --no-parallel-seeds
+python -m experiments.run experiments/configs/gmm/2d_4.yaml --no-parallel-seeds
 ```
 
 ### Parallel Execution
@@ -187,7 +187,7 @@ and variance ratio.
 python -m experiments.nuts --target blr --dataset german_credit --n_samples 10000
 
 # Generate reference for a config's target
-python -m experiments.nuts --from-config configs/blr_german.yaml
+python -m experiments.nuts --from-config experiments/configs/blr/german.yaml
 ```
 
 ### What It Does

@@ -16,8 +16,9 @@ import pytest
 from etd.costs.euclidean import squared_euclidean_cost
 from etd.costs.langevin import langevin_residual_cost
 from etd.step import init as etd_init, step as etd_step
-from etd.types import ETDConfig
 from etd.targets.gmm import GMMTarget
+
+from conftest import make_test_config, make_test_sdd_config
 
 
 # ---------------------------------------------------------------------------
@@ -210,10 +211,10 @@ class TestLangevinFDRWiring:
         shared = {"n_particles": 50, "n_iterations": 100}
         config, _, _, _ = build_algo_config(entry, shared)
 
-        assert config.cost == "langevin"
-        assert config.alpha == pytest.approx(0.2)
-        assert config.fdr is True
-        assert config.use_score is True
+        assert config.cost.type == "langevin"
+        assert config.proposal.alpha == pytest.approx(0.2)
+        assert config.proposal.fdr is True
+        assert config.proposal.use_score is True
 
     def test_alpha_override(self):
         """Explicit alpha=0.03 is respected alongside cost: langevin."""
@@ -225,12 +226,12 @@ class TestLangevinFDRWiring:
             "coupling": "balanced",
             "update": "categorical",
             "epsilon": 0.1,
-            "alpha": 0.03,
+            "proposal": {"alpha": 0.03},
         }
         shared = {"n_particles": 50, "n_iterations": 100}
         config, _, _, _ = build_algo_config(entry, shared)
 
-        assert config.alpha == pytest.approx(0.03)
+        assert config.proposal.alpha == pytest.approx(0.03)
 
     def test_use_score_enforcement(self):
         """cost: langevin sets use_score=True even without explicit flag."""
@@ -246,10 +247,10 @@ class TestLangevinFDRWiring:
         shared = {"n_particles": 50, "n_iterations": 100}
         config, _, _, _ = build_algo_config(entry, shared)
 
-        assert config.use_score is True
+        assert config.proposal.use_score is True
 
     def test_cost_params_contain_whiten(self):
-        """cost: {type: langevin, whiten: true} → cost_params has whiten."""
+        """cost: {type: langevin, whiten: true} → cost.params has whiten."""
         from experiments.run import build_algo_config
 
         entry = {
@@ -262,7 +263,7 @@ class TestLangevinFDRWiring:
         shared = {"n_particles": 50, "n_iterations": 100}
         config, _, _, _ = build_algo_config(entry, shared)
 
-        params_dict = dict(config.cost_params)
+        params_dict = dict(config.cost.params)
         assert params_dict.get("whiten") is True
 
 
@@ -276,7 +277,7 @@ class TestLangevinIntegration:
     def test_lret_balanced_converges_gmm_2d(self, rng, gmm_2d_4):
         """LRET-B on GMM 2D 4 modes: all modes covered after 300 iters."""
         target = gmm_2d_4
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=100,
             n_iterations=300,
             n_proposals=25,
@@ -314,13 +315,12 @@ class TestLangevinIntegration:
     def test_lret_sdd_converges_gmm_2d(self, rng, gmm_2d_4):
         """LRET-SDD on GMM 2D 4 modes: cross-cost is Langevin."""
         from etd.extensions.sdd import (
-            SDDConfig,
             init as sdd_init,
             step as sdd_step,
         )
 
         target = gmm_2d_4
-        config = SDDConfig(
+        config = make_test_sdd_config(
             n_particles=100,
             n_iterations=300,
             n_proposals=25,
@@ -365,7 +365,7 @@ class TestLangevinIntegration:
         target = gmm_2d_4
 
         for cost_name, alpha in [("langevin", 0.1), ("euclidean", 0.05)]:
-            config = ETDConfig(
+            config = make_test_config(
                 n_particles=50,
                 n_iterations=50,
                 n_proposals=25,
@@ -392,7 +392,7 @@ class TestLangevinIntegration:
     def test_lret_etd_step_function_runs_with_scan(self, rng, gmm_2d_4):
         """Verify LRET works inside jax.lax.scan (JIT compatibility)."""
         target = gmm_2d_4
-        config = ETDConfig(
+        config = make_test_config(
             n_particles=50,
             n_iterations=10,
             n_proposals=15,

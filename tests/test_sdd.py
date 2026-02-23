@@ -5,8 +5,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from etd.extensions.sdd import SDDConfig, SDDState, init, step
+from etd.extensions.sdd import SDDState, init, step
 from etd.targets.gaussian import GaussianTarget
+
+from conftest import make_test_sdd_config
 
 
 # ---------------------------------------------------------------------------
@@ -20,7 +22,7 @@ def target():
 
 @pytest.fixture
 def config():
-    return SDDConfig(
+    return make_test_sdd_config(
         n_particles=20,
         n_proposals=10,
         n_iterations=50,
@@ -49,7 +51,7 @@ class TestInit:
         assert state.dual_f_cross.shape == (config.n_particles,)
 
     def test_dual_g_cross_shape(self, state, config):
-        assert state.dual_g_cross.shape == (config.n_particles * config.n_proposals,)
+        assert state.dual_g_cross.shape == (config.n_particles * config.proposal.count,)
 
     def test_dual_f_self_shape(self, state, config):
         assert state.dual_f_self.shape == (config.n_particles,)
@@ -114,8 +116,8 @@ class TestStep:
 
 class TestSDDBehavior:
     def test_zero_step_size_no_movement(self, target):
-        """sdd_step_size=0 → positions unchanged."""
-        config = SDDConfig(
+        """eta=0 → positions unchanged."""
+        config = make_test_sdd_config(
             n_particles=20,
             n_proposals=10,
             epsilon=0.1,
@@ -149,7 +151,7 @@ class TestSDDBehavior:
 class TestConvergence:
     def test_gaussian_convergence(self, target):
         """SDD should converge on Gaussian(d=2) in 200 iters."""
-        config = SDDConfig(
+        config = make_test_sdd_config(
             n_particles=50,
             n_proposals=15,
             n_iterations=200,

@@ -22,7 +22,9 @@ from etd.diagnostics.metrics import (
 from etd.step import init, step
 from etd.targets.gaussian import GaussianTarget
 from etd.targets.gmm import GMMTarget
-from etd.types import ETDConfig, ETDState, Target
+from etd.types import ETDState, Target
+
+from conftest import make_test_config
 
 
 # ---------------------------------------------------------------------------
@@ -41,7 +43,7 @@ def gmm_target():
 
 @pytest.fixture
 def balanced_config():
-    return ETDConfig(
+    return make_test_config(
         coupling="balanced",
         epsilon=0.1,
         alpha=0.05,
@@ -103,7 +105,7 @@ class TestInit:
 
         N = balanced_config.n_particles
         d = gaussian_target.dim
-        M = balanced_config.n_proposals
+        M = balanced_config.proposal.count
 
         assert state.positions.shape == (N, d)
         assert state.dual_f.shape == (N,)
@@ -146,7 +148,7 @@ class TestStep:
 
         N = balanced_config.n_particles
         d = gaussian_target.dim
-        M = balanced_config.n_proposals
+        M = balanced_config.proposal.count
 
         assert new_state.positions.shape == (N, d)
         assert new_state.dual_f.shape == (N,)
@@ -178,7 +180,7 @@ class TestStep:
 
     def test_gibbs_coupling(self, gaussian_target):
         """Step with Gibbs coupling should run without error."""
-        config = ETDConfig(
+        config = make_test_config(
             coupling="gibbs",
             epsilon=0.1,
             alpha=0.05,

@@ -21,8 +21,8 @@ Unless otherwise specified you are to think and act according to the following d
 ```bash
 cd etd-vi
 pip install -e ".[dev]"          # installs jax, chex, matplotlib, numpyro, pyyaml
-python -m experiments.run configs/gmm_2d_4.yaml   # run one experiment
-python -m experiments.run configs/gmm_2d_4.yaml --debug  # no JIT
+python -m experiments.run experiments/configs/gmm/2d_4.yaml   # run one experiment
+python -m experiments.run experiments/configs/gmm/2d_4.yaml --debug  # no JIT
 pytest tests/                    # run tests
 ```
 
