@@ -20,6 +20,7 @@ experiment:
   metrics:
     - "sliced_wasserstein"
     - "energy_distance"
+    - "variance_ratio_ref"
     - "mean_error"
     - "coupling_ess"
     - "sinkhorn_iters"
@@ -43,7 +44,7 @@ experiment:
       update: categorical
       epsilon: 0.01
       proposal:
-        alpha: 1.0
+        alpha: [0.01, 0.05, 0.1, 0.5, 1.0]
         clip_score: 5.0
         count: 25
       mutation:
@@ -53,11 +54,11 @@ experiment:
         clip_score: 5.0
         cholesky: true
       preconditioner:
-        type: cholesky
+        type: "cholesky"
         proposals: true
         cost: true
         source: positions
-        shrinkage: 0.1
+        ema: 0.8
 
     - label: "SVGD"
       type: "baseline"
