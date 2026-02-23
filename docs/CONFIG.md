@@ -24,6 +24,7 @@ experiment:
   shared:
     n_particles: int           # N (default: 100)
     n_iterations: int          # T (default: 500)
+    progress_segments: int     # Optional: extra progress ticks between checkpoints
     init:
       type: str                # "gaussian" | "prior"
       scale: float             # std for gaussian init (default: 2.0)

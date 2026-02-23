@@ -7,6 +7,7 @@ samples, and managing datasets. All live in `experiments/`.
 experiments/
 ├── run.py              # Main: YAML → run → save
 ├── tune.py             # Sweep-based hyperparameter tuning
+├── _parallel.py        # Parallel seed/sweep execution via vmap
 ├── nuts.py             # Generate NUTS reference samples
 ├── datasets.py         # Download, preprocess, store in DuckDB
 └── configs/
@@ -26,28 +27,40 @@ algorithm × seed combinations, and saves results.
 ### Usage
 
 ```bash
-# Standard run
+# Standard run (parallel seeds via vmap, default)
 python -m experiments.run configs/gmm_2d_4.yaml
 
-# Debug mode (no JIT, print statements work)
-ETD_DEBUG=1 python -m experiments.run configs/gmm_2d_4.yaml
+# Debug mode (no JIT, sequential)
+python -m experiments.run configs/gmm_2d_4.yaml --debug
 
-# Override output directory
-python -m experiments.run configs/gmm_2d_4.yaml --output results/scratch/
+# Force sequential seed execution
+python -m experiments.run configs/gmm_2d_4.yaml --no-parallel-seeds
 ```
+
+### Parallel Execution
+
+By default, `run.py` executes all seeds for each algorithm in parallel
+using `jax.vmap`. The vmapped scan fuses all seed computations into a
+single XLA kernel per segment, which is significantly faster on GPU.
+
+- **Parallel (default):** Progress bar ticks per scan segment, not per seed.
+- **Sequential (`--no-parallel-seeds` or `--debug`):** Original loop-over-seeds
+  path, progress bar ticks per seed.
+- **Init positions are pre-computed** once and shared across all algorithms
+  (they depend only on seed, target, and shared config).
+- **JAX compilation cache** is enabled at `~/.cache/jax/etd/` for faster
+  re-runs with the same configs.
 
 ### What It Does
 
 1. Load YAML config.
 2. Expand sweep parameters (list values → Cartesian product).
-3. For each seed × algorithm combination:
-   a. Initialize target and particles.
-   b. Resolve config strings to functions (`cost: "euclidean"` → `euclidean_cost`).
-   c. Run the algorithm loop with Rich progress bar.
-   d. Record metrics at checkpoint iterations.
-   e. Save particle snapshots.
-4. Print summary table (Rich).
-5. Save to `results/{name}/{timestamp}/`:
+3. Pre-compute init positions for all seeds (shared across algorithms).
+4. For each algorithm:
+   - **Parallel path:** `batch_init_states → warm-up → vmapped scan → metrics`.
+   - **Sequential path:** Loop over seeds, `run_single` per seed.
+5. Print summary table (Rich).
+6. Save to `results/{name}/{timestamp}/`:
    - `config.yaml` — frozen copy of input
    - `metrics.json` — nested dict: `{seed → {algo → {checkpoint → {metric → value}}}}`
    - `particles.npz` — arrays: `{seed → {algo → {checkpoint → (N, d)}}}`

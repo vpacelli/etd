@@ -898,16 +898,29 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     """
     global DEBUG
 
+    parallel_seeds = True
+
     if config_path is None:
         parser = argparse.ArgumentParser(description="ETD experiment runner")
         parser.add_argument("config", help="Path to YAML config file")
         parser.add_argument("--debug", action="store_true", help="Disable JIT")
+        parser.add_argument(
+            "--no-parallel-seeds", action="store_true",
+            help="Disable vmapped seed parallelism (use sequential loop)",
+        )
         args = parser.parse_args()
         config_path = args.config
         debug = args.debug
+        parallel_seeds = not args.no_parallel_seeds
 
     if debug:
         DEBUG = True
+        parallel_seeds = False  # vmap requires JIT
+
+    # --- JAX compilation cache ---
+    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "jax", "etd")
+    os.makedirs(cache_dir, exist_ok=True)
+    jax.config.update("jax_compilation_cache_dir", cache_dir)
 
     # --- Load config ---
     cfg = load_config(config_path)
@@ -963,14 +976,33 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
     algo_labels = [ac[0] for ac in algo_configs]
     n_iters = shared.get("n_iterations", 500)
+    n_progress = shared.get("progress_segments")
 
+    mode_str = "parallel" if parallel_seeds else "sequential"
     console.print(
-        f"[{now}] Running {len(algo_configs)} algorithms × {len(seeds)} seeds"
+        f"[{now}] Running {len(algo_configs)} algorithms × {len(seeds)} seeds ({mode_str})"
     )
 
     # --- Reference data ---
     ref_key = jax.random.PRNGKey(99999)
     ref_data = get_reference_data(target, cfg, ref_key)
+
+    # --- Pre-compute init positions (shared across algorithms) ---
+    # Init positions depend only on (seed, target, shared), not on the
+    # algorithm, so we compute them once and reuse for all algorithms.
+    seed_run_keys = {}  # seed → k_run (passed to run_single / batched)
+    seed_init_positions = {}  # seed → (N, d) ndarray
+    for seed in seeds:
+        key = jax.random.PRNGKey(seed)
+        k_init, _k_ref, k_run = jax.random.split(key, 3)
+        seed_run_keys[seed] = k_run
+        seed_init_positions[seed] = np.asarray(
+            make_init_positions(k_init, target, shared)
+        )
+
+    # Pre-stack for batched path
+    all_init_pos = np.stack([seed_init_positions[s] for s in seeds])
+    batch_run_keys = [seed_run_keys[s] for s in seeds]
 
     # --- Pre-compile step functions (debug mode only) ---
     # In scan mode, _make_jit_scan creates its own JIT closure.
@@ -984,38 +1016,79 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     all_particles = {} # seed → algo → ckpt → (N,d) ndarray
     wall_clocks = {}   # (seed, algo) → seconds
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    ) as progress:
-        for label, config, init_fn, step_fn, is_bl in algo_configs:
-            task_id = progress.add_task(
-                f"  {label}", total=len(seeds)
-            )
+    if parallel_seeds and not DEBUG:
+        # --- Batched path: vmap over seeds ---
+        from experiments._parallel import run_seeds_batched
 
-            for seed in seeds:
-                key = jax.random.PRNGKey(seed)
-                k_init, k_ref, k_run = jax.random.split(key, 3)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            for label, config, init_fn, step_fn, is_bl in algo_configs:
+                # Progress: one tick per segment (not per seed)
+                segments_count = len(
+                    _compute_segments(checkpoints, n_iters)
+                )
+                if n_progress is not None:
+                    from experiments._parallel import _compute_progress_segments
+                    segs, _ = _compute_progress_segments(
+                        checkpoints, n_iters, n_progress,
+                    )
+                    segments_count = len(segs)
 
-                init_positions = make_init_positions(k_init, target, shared)
-
-                m_dict, p_dict, wc = run_single(
-                    k_run, target, config, init_fn, step_fn, is_bl,
-                    init_positions, n_iters, checkpoints,
-                    metrics_list, ref_data,
-                    step_jit=compiled_steps.get(label),
-                    debug=debug,
+                task_id = progress.add_task(
+                    f"  {label}", total=segments_count or 1,
                 )
 
-                all_metrics.setdefault(seed, {})[label] = m_dict
-                all_particles.setdefault(seed, {})[label] = p_dict
-                wall_clocks[(seed, label)] = wc
+                m_by_seed, p_by_seed, wc = run_seeds_batched(
+                    batch_run_keys, target, config,
+                    init_fn, step_fn, all_init_pos,
+                    n_iters, checkpoints, metrics_list, ref_data,
+                    compute_metrics_fn=compute_metrics,
+                    n_progress=n_progress,
+                    progress_callback=lambda: progress.advance(task_id),
+                )
 
-                progress.advance(task_id)
+                # Unpack batched results into all_metrics / all_particles
+                for s_idx, seed in enumerate(seeds):
+                    all_metrics.setdefault(seed, {})[label] = m_by_seed[s_idx]
+                    all_particles.setdefault(seed, {})[label] = p_by_seed[s_idx]
+                    wall_clocks[(seed, label)] = wc / len(seeds)  # amortized
+
+    else:
+        # --- Sequential path (unchanged) ---
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            for label, config, init_fn, step_fn, is_bl in algo_configs:
+                task_id = progress.add_task(
+                    f"  {label}", total=len(seeds)
+                )
+
+                for seed in seeds:
+                    m_dict, p_dict, wc = run_single(
+                        seed_run_keys[seed], target, config,
+                        init_fn, step_fn, is_bl,
+                        seed_init_positions[seed], n_iters, checkpoints,
+                        metrics_list, ref_data,
+                        step_jit=compiled_steps.get(label),
+                        debug=debug,
+                    )
+
+                    all_metrics.setdefault(seed, {})[label] = m_dict
+                    all_particles.setdefault(seed, {})[label] = p_dict
+                    wall_clocks[(seed, label)] = wc
+
+                    progress.advance(task_id)
 
     # --- Summary ---
     _print_summary(
