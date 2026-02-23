@@ -36,7 +36,17 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 from rich.table import Table
+from rich.text import Text
 
+from experiments._display import (
+    HIGHER_IS_BETTER,
+    LOWER_IS_BETTER,
+    fmt_mean_std,
+    fmt_sigfig,
+    log_footer,
+    log_header,
+    print_algo_result,
+)
 from experiments.run import (
     build_algo_config,
     build_algo_label,
@@ -53,22 +63,7 @@ from etd.targets import get_target
 
 console = Console()
 
-# ---------------------------------------------------------------------------
-# Metric direction
-# ---------------------------------------------------------------------------
-
-LOWER_IS_BETTER = {
-    "energy_distance", "sliced_wasserstein", "mean_error",
-    "mode_proximity", "mode_balance",
-}
-HIGHER_IS_BETTER = set()
-
-
-def _is_better(val: float, best: float, metric: str) -> bool:
-    """Return True if val is better than best for the given metric."""
-    if metric in LOWER_IS_BETTER:
-        return val < best
-    return val > best
+# Metric direction sets imported from experiments._display
 
 
 # ---------------------------------------------------------------------------
@@ -132,9 +127,6 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     target = get_target(target_cfg["type"], **target_cfg.get("params", {}))
 
     mode_str = "parallel" if parallel_seeds else "sequential"
-    console.print(f"[bold]Tuning:[/bold] {name}")
-    console.print(f"  Target: {target_cfg['type']}, d={target.dim}")
-    console.print(f"  Ranking by: {rank_metric}")
 
     # --- Expand sweeps ---
     algo_configs = []
@@ -153,7 +145,16 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
             config, init_fn, step_fn, is_bl = build_algo_config(concrete, shared)
             algo_configs.append((label, config, init_fn, step_fn, is_bl, concrete))
 
-    console.print(f"  {len(algo_configs)} configs × {len(seeds)} seeds ({mode_str})\n")
+    n_iters = shared.get("n_iterations", 500)
+    hparams = {
+        "N": shared.get("n_particles", 100),
+        "T": n_iters,
+        "ranking": rank_metric,
+    }
+    log_header(
+        console, config_path, target_cfg["type"], target.dim,
+        len(algo_configs), len(seeds), mode_str, hparams=hparams,
+    )
 
     # --- Reference data ---
     ref_key = jax.random.PRNGKey(99999)
@@ -174,7 +175,6 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     batch_run_keys = [seed_run_keys[s] for s in seeds]
 
     # --- Run all configs ---
-    n_iters = shared.get("n_iterations", 500)
     final_ckpt = max(checkpoints)
     results = {}  # label → list of metric values across seeds
 
@@ -342,19 +342,21 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
     # --- Display ---
     table = Table(
-        title=f"Tuning Results — {rank_metric}",
+        title=f"Tuning Results \u2014 {rank_metric}",
         box=box.ROUNDED,
     )
     table.add_column("Rank", justify="right", style="bold")
     table.add_column("Configuration")
-    table.add_column(rank_metric.replace("_", " ").title(), justify="right")
-    table.add_column("Std", justify="right")
+    table.add_column(
+        rank_metric.replace("_", " ").title() + " (avg \u00b1 std)",
+        justify="right",
+    )
 
     for i, (label, avg, std) in enumerate(rankings):
-        style = "bold green" if i == 0 else ""
-        table.add_row(
-            str(i + 1), label, f"{avg:.6f}", f"{std:.6f}", style=style,
-        )
+        cell = Text(fmt_mean_std(avg, std))
+        if i == 0:
+            cell.stylize("bold green")
+        table.add_row(str(i + 1), label, cell)
 
     console.print(table)
 
@@ -377,7 +379,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
                 f,
                 default_flow_style=False,
             )
-        console.print(f"\n✓ Best config saved to {best_path}")
+        log_footer(console, best_path, message="Best config saved to")
 
     return {
         "best_label": rankings[0][0],

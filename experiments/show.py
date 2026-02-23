@@ -20,9 +20,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
-from rich import box
 from rich.console import Console
-from rich.table import Table
+
+from experiments._display import build_summary_table_flat
 
 from etd.diagnostics.metrics import (
     energy_distance,
@@ -254,41 +254,7 @@ def print_summary(
         metrics_list: Ordered list of metrics to display.
         wall_clocks: Optional ``{(seed, algo) → seconds}`` for timing column.
     """
-    # Discover algo labels (preserve insertion order from first seed)
-    algo_labels = []
-    for seed_data in results.values():
-        for label in seed_data:
-            if label not in algo_labels:
-                algo_labels.append(label)
-
-    seeds = sorted(results.keys())
-
-    table = Table(
-        title="Results (seed avg ± std)",
-        box=box.ROUNDED,
-        show_lines=False,
-    )
-    table.add_column("Algorithm", style="bold")
-    for m in metrics_list:
-        table.add_column(m.replace("_", " ").title(), justify="right")
-
-    for label in algo_labels:
-        row = [label]
-        for metric in metrics_list:
-            vals = []
-            for seed in seeds:
-                v = results.get(seed, {}).get(label, {}).get(metric)
-                if v is not None and not np.isnan(v):
-                    vals.append(v)
-            if vals:
-                avg = np.mean(vals)
-                std = np.std(vals)
-                row.append(f"{avg:.4f} ± {std:.4f}")
-            else:
-                row.append("N/A")
-
-        table.add_row(*row)
-
+    table = build_summary_table_flat(results, metrics_list)
     console.print(table)
 
 

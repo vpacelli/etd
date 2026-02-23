@@ -27,7 +27,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
-from rich import box
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -37,8 +36,13 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.table import Table
 
+from experiments._display import (
+    build_summary_table,
+    log_footer,
+    log_header,
+    print_algo_result,
+)
 from etd.baselines import BASELINES, get_baseline
 from etd.diagnostics.metrics import (
     energy_distance, mean_error, mean_rmse, mode_balance,
@@ -1078,41 +1082,10 @@ def _print_summary(
     wall_clocks: dict,
 ) -> None:
     """Print a Rich summary table of seed-averaged results."""
-    final_ckpt = max(checkpoints)
-
-    table = Table(
-        title="Results (seed avg +/- std)",
-        box=box.ROUNDED,
-        show_lines=False,
+    table = build_summary_table(
+        all_metrics, seeds, algo_labels, max(checkpoints),
+        metrics_list, wall_clocks=wall_clocks,
     )
-    table.add_column("Algorithm", style="bold")
-    for m in metrics_list:
-        table.add_column(m.replace("_", " ").title(), justify="right")
-    table.add_column("Wall Clock", justify="right")
-
-    for label in algo_labels:
-        row = [label]
-        for metric in metrics_list:
-            vals = []
-            for seed in seeds:
-                v = all_metrics.get(seed, {}).get(label, {}).get(final_ckpt, {}).get(metric)
-                if v is not None and not np.isnan(v):
-                    vals.append(v)
-            if vals:
-                avg = np.mean(vals)
-                std = np.std(vals)
-                row.append(f"{avg:.4f} +/- {std:.4f}")
-            else:
-                row.append("N/A")
-
-        # Wall clock
-        wc_vals = [wall_clocks.get((seed, label), 0.0) for seed in seeds]
-        wc_avg = np.mean(wc_vals)
-        wc_std = np.std(wc_vals)
-        row.append(f"{wc_avg:.1f} +/- {wc_std:.1f}s")
-
-        table.add_row(*row)
-
     console.print(table)
 
 
@@ -1171,12 +1144,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     # --- Build target ---
     target = get_target(target_cfg["type"], **target_cfg.get("params", {}))
 
-    # --- Header ---
-    now = datetime.now().strftime("%H:%M:%S")
-    console.print(f"[{now}] Loading config from {config_path}")
-    console.print(
-        f"[{now}] Target: {target_cfg['type']}, d={target.dim}"
-    )
+    # --- Header (printed after algo expansion below) ---
 
     # --- Expand sweeps and build configs ---
     algo_configs = []  # list of (label, config, init_fn, step_fn, is_baseline)
@@ -1213,8 +1181,12 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
     n_progress = shared.get("progress_segments")
 
     mode_str = "parallel" if parallel_seeds else "sequential"
-    console.print(
-        f"[{now}] Running {len(algo_configs)} algorithms x {len(seeds)} seeds ({mode_str})"
+    hparams = {"N": shared.get("n_particles", 100), "T": n_iters}
+    if len(checkpoints) > 1:
+        hparams["checkpoints"] = len(checkpoints)
+    log_header(
+        console, config_path, target_cfg["type"], target.dim,
+        len(algo_configs), len(seeds), mode_str, hparams=hparams,
     )
 
     # --- Reference data ---
@@ -1293,6 +1265,17 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
                     all_particles.setdefault(seed, {})[label] = p_by_seed[s_idx]
                     wall_clocks[(seed, label)] = wc / len(seeds)  # amortized
 
+                # Per-algo completion line (primary metric)
+                if metrics_list:
+                    primary = metrics_list[0]
+                    pvals = [
+                        m_by_seed[i].get(max(checkpoints), {}).get(primary)
+                        for i in range(len(seeds))
+                    ]
+                    pvals = [v for v in pvals if v is not None and not np.isnan(v)]
+                    if pvals:
+                        print_algo_result(console, label, primary, float(np.mean(pvals)))
+
     else:
         # --- Sequential path (unchanged) ---
         with Progress(
@@ -1324,6 +1307,20 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
 
                     progress.advance(task_id)
 
+                # Per-algo completion line (primary metric)
+                if metrics_list:
+                    primary = metrics_list[0]
+                    pvals = []
+                    for seed in seeds:
+                        v = (all_metrics.get(seed, {})
+                             .get(label, {})
+                             .get(max(checkpoints), {})
+                             .get(primary))
+                        if v is not None and not np.isnan(v):
+                            pvals.append(v)
+                    if pvals:
+                        print_algo_result(console, label, primary, float(np.mean(pvals)))
+
     # --- Summary ---
     _print_summary(
         all_metrics, seeds, algo_labels, checkpoints,
@@ -1341,7 +1338,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
         out_dir, cfg, all_metrics, all_particles,
         ref_data=ref_data, display_metadata=resolved_styles,
     )
-    console.print(f"\nResults saved to {out_dir}/")
+    log_footer(console, f"{out_dir}/")
 
     return all_metrics
 
