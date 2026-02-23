@@ -36,9 +36,9 @@ experiment:
       update: categorical
       epsilon: 0.01
       proposal:
-        alpha: 0.05
+        alpha: 0.5
         clip_score: 5.0
-        count: 25      
+        count: 25
       preconditioner:
         type: "cholesky"
         proposals: true
