@@ -56,9 +56,11 @@ def sinkhorn_log_domain(
     f = dual_f_init if dual_f_init is not None else jnp.zeros(N)
     g = dual_g_init if dual_g_init is not None else jnp.zeros(P)
 
-    # Init f_prev so the first convergence check always fails:
-    # set f_prev = f + 1.0, guaranteeing |f - f_prev| > tol on entry.
-    f_prev = f + 1.0
+    # Init f_prev so the first convergence check always fails.
+    # Using inf guarantees |f - f_prev| = inf > any finite tol,
+    # unlike the old f + 1.0 trick which broke for tol >= 1.0 or
+    # |f| > 2^24 (float32 precision loss).
+    f_prev = jnp.full_like(f, jnp.inf)
 
     # --- While-loop body ---
     def cond_fn(state):
