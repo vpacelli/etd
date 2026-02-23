@@ -656,7 +656,7 @@ def run_sweep_batched(
     n_progress: Optional[int] = None,
     progress_callback: Optional[Callable] = None,
     chunk_size: int = 8,
-) -> Tuple[Dict[int, Dict[int, Dict[int, Dict[str, float]]]], float]:
+) -> Tuple[Dict[int, Dict[int, Dict[int, Dict[str, float]]]], Dict[int, Dict[int, Dict[int, np.ndarray]]], float]:
     """Run all configs × seeds in parallel via double-vmapped scan.
 
     Key management matches ``run_single``: each key is split into
@@ -684,8 +684,9 @@ def run_sweep_batched(
         chunk_size: Max configs per double-vmap batch.
 
     Returns:
-        Tuple ``(metrics_by_config_seed, wall_clock)`` where:
+        Tuple ``(metrics_by_config_seed, particles_by_config_seed, wall_clock)`` where:
         - ``metrics_by_config_seed``: ``{config_idx → {seed_idx → {ckpt → {metric → val}}}}``
+        - ``particles_by_config_seed``: ``{config_idx → {seed_idx → {ckpt → (N,d) ndarray}}}``
         - ``wall_clock``: Total wall-clock seconds.
     """
     S = len(keys)
@@ -714,6 +715,7 @@ def run_sweep_batched(
     chunks = list(range(0, C, chunk_size))
 
     metrics_by_config_seed: Dict[int, Dict[int, Dict[int, Dict[str, float]]]] = {}
+    particles_by_config_seed: Dict[int, Dict[int, Dict[int, np.ndarray]]] = {}
     total_wall = 0.0
 
     for chunk_start in chunks:
@@ -762,12 +764,28 @@ def run_sweep_batched(
                 seed_states,
             )
 
-        # Init metrics storage for this chunk
+        # Init metrics and particles storage for this chunk
+        checkpoint_set = set(checkpoints)
         for c_offset in range(chunk_C):
             c_idx = chunk_start + c_offset
             metrics_by_config_seed[c_idx] = {}
+            particles_by_config_seed[c_idx] = {}
             for s_idx in range(S):
                 metrics_by_config_seed[c_idx][s_idx] = {}
+                particles_by_config_seed[c_idx][s_idx] = {}
+
+        # Checkpoint 0
+        if 0 in checkpoint_set:
+            for c_offset in range(chunk_C):
+                c_idx = chunk_start + c_offset
+                for s_idx in range(S):
+                    pos = np.asarray(
+                        chunk_states.positions[c_offset, s_idx]  # type: ignore
+                    )
+                    particles_by_config_seed[c_idx][s_idx][0] = pos
+                    metrics_by_config_seed[c_idx][s_idx][0] = compute_metrics_fn(
+                        jnp.asarray(pos), target, metrics_list, ref_data,
+                    )
 
         # Segment loop
         t_start = time.perf_counter()
@@ -785,6 +803,7 @@ def run_sweep_batched(
                         pos = np.asarray(
                             chunk_states.positions[c_offset, s_idx]  # type: ignore
                         )
+                        particles_by_config_seed[c_idx][s_idx][boundary] = pos
                         step_metrics = compute_metrics_fn(
                             jnp.asarray(pos), target, metrics_list, ref_data,
                         )
@@ -800,4 +819,4 @@ def run_sweep_batched(
 
         total_wall += time.perf_counter() - t_start
 
-    return metrics_by_config_seed, total_wall
+    return metrics_by_config_seed, particles_by_config_seed, total_wall

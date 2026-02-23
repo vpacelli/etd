@@ -251,7 +251,7 @@ def main(config_path: Optional[str] = None, debug: bool = False) -> dict:
                             total=1,
                         )
 
-                        m_by_cs, wc = run_sweep_batched(
+                        m_by_cs, _p_by_cs, wc = run_sweep_batched(
                             batch_run_keys, target, base_config,
                             configs_list, init_fn, step_fn,
                             all_init_pos, sweep_fields,
