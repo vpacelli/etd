@@ -42,12 +42,28 @@ ALGO_COLORS = {
     "ETD-B-Maha": "#E89DA3",
     "ETD-SR": "#E89DA3",
     "ETD-B-SF": "#B22222",
+    # LRET variants (same coupling types, different name)
+    "LRET-B": "#B22222",
+    "LRET-B-W": "#E89DA3",
+    # Mutation variants
+    "ETD-B+MALA": "#8B0A1A",
+    "LRET-B+MALA": "#7A2E2E",
     # Other algorithms
     "SDD": STEEL_BLUE,
     "SVGD": TEAL,
     "ULA": SLATE_GRAY,
+    "MALA": SLATE_GRAY,
     "MPPI": "#6A5ACD",      # Slate blue — distinct from ULA's gray
     "EKS": DARK_CRIMSON,
+}
+
+# Deterministic linestyle cycle for algorithms sharing similar colors.
+ALGO_LINESTYLES = {
+    "ETD-B": "-",
+    "LRET-B": "--",
+    "ETD-B+MALA": "-.",
+    "LRET-B+MALA": (0, (3, 1, 1, 1, 1, 1)),  # dash-dot-dot
+    "LRET-B-W": ":",
 }
 
 # Family-based palettes for automatic color assignment.
