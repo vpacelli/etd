@@ -360,13 +360,11 @@ def run_seeds_batched(
 
 # Fields that affect JIT trace (Python-level branching, array shapes).
 # Sweeping these requires separate JIT compilations.
-# NOTE: step_size has a Python `if step_size < 1.0` in categorical.py,
-# making it structural.
 _STRUCTURAL_FIELDS_ETD = frozenset({
     "coupling", "cost", "cost_params", "cost_normalize", "update",
     "n_particles", "n_proposals", "use_score", "fdr", "dv_feedback",
     "sinkhorn_max_iter", "preconditioner", "mutation",
-    "precondition", "whiten", "step_size",
+    "precondition", "whiten",
 })
 
 # Fields that are purely arithmetic (safe as JAX tracers under vmap).

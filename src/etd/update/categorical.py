@@ -5,8 +5,6 @@ using systematic (stratified) resampling for lower variance than
 multinomial sampling.
 """
 
-from typing import Optional
-
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
@@ -17,7 +15,7 @@ def systematic_resample(
     log_gamma: jnp.ndarray,         # (N, P)
     proposals: jnp.ndarray,         # (P, d)
     step_size: float = 1.0,
-    positions: Optional[jnp.ndarray] = None,   # (N, d) — needed for damping
+    positions: jnp.ndarray = None,  # (N, d) — current positions for damping
 ) -> tuple:
     """Resample proposals via systematic resampling.
 
@@ -41,8 +39,9 @@ def systematic_resample(
             Rows must sum to ~1 in probability space.
         proposals: Proposal positions, shape ``(P, d)``.
         step_size: Damping factor η ∈ (0, 1].  Default 1.0 (full step).
-        positions: Current positions, shape ``(N, d)``.  Required when
-            ``step_size < 1.0``.
+            Traceable under vmap (no Python branching).
+        positions: Current positions, shape ``(N, d)``.  Always used
+            for damping (identity when ``step_size == 1.0``).
 
     Returns:
         Tuple ``(new_positions, aux)`` where:
@@ -80,9 +79,8 @@ def systematic_resample(
     # Gather selected proposals
     new_positions = proposals[indices]   # (N, d)
 
-    # Optional damping
-    if step_size < 1.0:
-        assert positions is not None, "positions required when step_size < 1.0"
-        new_positions = (1.0 - step_size) * positions + step_size * new_positions
+    # Damping: (1 - η)x + ηy. Identity when η = 1.0.
+    # Always applied (no branch) so step_size is traceable under vmap.
+    new_positions = (1.0 - step_size) * positions + step_size * new_positions
 
     return new_positions, {"indices": indices}

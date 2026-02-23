@@ -10,8 +10,6 @@ It produces smoother trajectories but cannot make the discrete jumps
 that resampling allows.
 """
 
-from typing import Optional
-
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import logsumexp
@@ -22,7 +20,7 @@ def barycentric_update(
     log_gamma: jnp.ndarray,        # (N, P)
     proposals: jnp.ndarray,        # (P, d)
     step_size: float = 1.0,
-    positions: Optional[jnp.ndarray] = None,  # (N, d)
+    positions: jnp.ndarray = None, # (N, d)
 ) -> tuple:
     """Barycentric (weighted mean) update.
 
@@ -44,8 +42,9 @@ def barycentric_update(
         log_gamma: Log coupling matrix, shape ``(N, P)``.
         proposals: Proposal positions, shape ``(P, d)``.
         step_size: Damping factor eta in (0, 1].  Default 1.0 (pure mean).
-        positions: Current positions, shape ``(N, d)``.  Required when
-            ``step_size < 1.0``.
+            Traceable under vmap (no Python branching).
+        positions: Current positions, shape ``(N, d)``.  Always used
+            for damping (identity when ``step_size == 1.0``).
 
     Returns:
         Tuple ``(new_positions, aux)`` where:
@@ -59,8 +58,8 @@ def barycentric_update(
     # Barycentric mean: (N, P) @ (P, d) → (N, d)
     bary_mean = weights @ proposals
 
-    # Apply step-size damping
-    if step_size < 1.0:
-        return (1.0 - step_size) * positions + step_size * bary_mean, {"weights": weights}
+    # Damping: (1 - η)x + ηy. Identity when η = 1.0.
+    # Always applied (no branch) so step_size is traceable under vmap.
+    new_positions = (1.0 - step_size) * positions + step_size * bary_mean
 
-    return bary_mean, {"weights": weights}
+    return new_positions, {"weights": weights}

@@ -18,7 +18,7 @@ import pytest
 from etd.targets.gmm import GMMTarget
 from etd.types import ETDConfig, PreconditionerConfig
 from experiments._parallel import (
-    _SCALAR_FIELDS_ETD,
+    _STRUCTURAL_FIELDS_ETD,
     _compute_progress_segments,
     _make_batched_scan,
     batch_init_states,
@@ -376,8 +376,8 @@ class TestStructuralGrouping:
         assert "epsilon" in varying
         assert "score_clip" in varying
         assert "alpha" not in varying
-        # step_size is structural (Python if in categorical.py), not scalar
-        assert "step_size" not in _SCALAR_FIELDS_ETD
+        # step_size is scalar (damping uses branchless arithmetic)
+        assert "step_size" not in _STRUCTURAL_FIELDS_ETD
 
 
 # ---------------------------------------------------------------------------

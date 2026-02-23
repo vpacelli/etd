@@ -228,13 +228,16 @@ class TestSystematicResample:
         log_gamma = jax.nn.log_softmax(logits, axis=1)
 
         proposals = jnp.eye(P, P)  # use identity so index = position
+        positions = jnp.zeros((N, P))  # step_size=1.0 → damping is identity
 
         n_samples = 10_000
         counts = np.zeros(P)
 
         for i in range(n_samples):
             k = jax.random.PRNGKey(i + 100)
-            new_pos, aux = systematic_resample(k, log_gamma, proposals)
+            new_pos, aux = systematic_resample(
+                k, log_gamma, proposals, positions=positions,
+            )
             # Identify which proposal was selected
             idx = int(jnp.argmax(new_pos[0]))
             counts[idx] += 1
@@ -261,8 +264,9 @@ class TestResampleAux:
         key = jax.random.PRNGKey(0)
         log_gamma = jnp.zeros((N, P))
         proposals = jax.random.normal(key, (P, 3))
+        positions = jnp.zeros((N, 3))
 
-        _, aux = systematic_resample(key, log_gamma, proposals)
+        _, aux = systematic_resample(key, log_gamma, proposals, positions=positions)
         assert aux["indices"].shape == (N,)
 
     def test_aux_indices_in_range(self):
@@ -271,8 +275,9 @@ class TestResampleAux:
         key = jax.random.PRNGKey(42)
         log_gamma = jax.random.normal(key, (N, P))
         proposals = jax.random.normal(jax.random.PRNGKey(1), (P, 3))
+        positions = jnp.zeros((N, 3))
 
-        _, aux = systematic_resample(key, log_gamma, proposals)
+        _, aux = systematic_resample(key, log_gamma, proposals, positions=positions)
         assert jnp.all(aux["indices"] >= 0)
         assert jnp.all(aux["indices"] < P)
 
