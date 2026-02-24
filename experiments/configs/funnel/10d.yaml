@@ -37,7 +37,7 @@ experiment:
       epsilon: 0.01
       proposal:
         alpha: 0.5
-        clip_score: 5.0  # 1.0 # 0.1 # Should rerun with even more clipping
+        clip_score: .inf # 5.0  # 1.0 # 0.1 # Should rerun with even more clipping
         count: 25
       preconditioner:
         type: "cholesky"
@@ -59,7 +59,7 @@ experiment:
       epsilon: 0.1
       proposal:
         alpha: 0.5
-        clip_score: 5.0 # 1.0 # 0.1 # Should rerun with even more clipping
+        clip_score: .inf # 5.0 # 1.0 # 0.1 # Should rerun with even more clipping
         count: 25
       preconditioner:
         type: "cholesky"
