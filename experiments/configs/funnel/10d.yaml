@@ -32,7 +32,7 @@ experiment:
         type: "balanced"
         tolerance: 1e-3
         iterations: 250
-        damping: 0.5
+        damping: [0.1, 0.25, 0.5]
       update: categorical
       epsilon: 0.01
       proposal:
@@ -54,7 +54,7 @@ experiment:
         type: "balanced"
         tolerance: 1e-3
         iterations: 250
-        damping: 0.5
+        damping: [0.1, 0.25, 0.5]
       update: "categorical"
       epsilon: 0.1
       proposal:
