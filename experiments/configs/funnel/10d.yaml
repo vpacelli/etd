@@ -32,7 +32,7 @@ experiment:
         type: "balanced"
         tolerance: 1e-3
         iterations: 250
-        damping: [0.1, 0.25, 0.5]
+        damping: 0.5
       update: categorical
       epsilon: 0.01
       proposal:
@@ -54,11 +54,11 @@ experiment:
         type: "balanced"
         tolerance: 1e-3
         iterations: 250
-        damping: [0.1, 0.25, 0.5]
+        damping: 0.5
       update: "categorical"
       epsilon: 0.1
       proposal:
-        alpha: 0.5
+        alpha: [0.01, 0.05, 0.1, 0.5, 1.0, 2.0]
         clip_score: .inf # 5.0 # 1.0 # 0.1 # Should rerun with even more clipping
         count: 25
       preconditioner:
@@ -95,15 +95,15 @@ experiment:
     #     source: positions
     #     ema: 0.8
 
-    - label: "SVGD"
-      type: "baseline"
-      method: "svgd"
-      stepsize: 0.1
-      clip_score: 5.0
+    # - label: "SVGD"
+    #   type: "baseline"
+    #   method: "svgd"
+    #   stepsize: 0.1
+    #   clip_score: 5.0
 
-    - label: "MALA"
-      type: "baseline"
-      method: "mala"
-      stepsize: 0.005
-      clip_score: 0.1
-      preconditioner: "cholesky"
+    # - label: "MALA"
+    #   type: "baseline"
+    #   method: "mala"
+    #   stepsize: 0.005
+    #   clip_score: 0.1
+    #   preconditioner: "cholesky"
