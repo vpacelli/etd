@@ -65,7 +65,8 @@ experiment:
         type: "cholesky"
         proposals: true
         cost: true
-        shrinkage: 0.1
+        source: positions
+        ema: 0.8
 
     # - label: ETD-B
     #   sublabel: MALA
